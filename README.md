@@ -87,4 +87,6 @@ In warper you can customize the connection modes like in cloudflare one client a
 
 ## License
 
-Copyright (c) 2026 x01Jin. Shared under CC BY-NC-SA 4.0. See LICENSE. That means you can copy and adapt it for non-commercial use if you credit x01Jin and share your version under the same terms.
+This project is licensed under the **GNU General Public License v3.0 (GPLv3)**. 
+
+Copyright (C) 2024 [x01Jin]
