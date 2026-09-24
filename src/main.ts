@@ -116,6 +116,8 @@ let store: Store | null = null;
 let storePath: string | null = null;
 let lastHealth: string | null = null;
 let modeAdopted = false;
+let deviceFetching = false;
+let lastDeviceError: string | null = null;
 
 function logHealth(reason: string): void {
   if (reason === lastHealth) return;
@@ -334,22 +336,54 @@ async function checkWarp(): Promise<boolean> {
   }
 }
 
+function paintDevice(identity: WarpIdentity | null): void {
+  el.device.textContent =
+    identity && identity.deviceId
+      ? `${identity.deviceId.slice(0, 8)}… (${identity.accountType || "?"})`
+      : "—";
+}
+
+/// Re-fetch `registration show` only while Device is still blank.
+async function refreshDeviceIfBlank(): Promise<void> {
+  if (busy || warpMissing || deviceFetching) return;
+  if (el.device.textContent !== "—") return;
+  deviceFetching = true;
+  try {
+    const identity = await invoke<WarpIdentity>("get_identity");
+    paintDevice(identity);
+    if (el.device.textContent !== "—") {
+      lastDeviceError = null;
+    } else if (lastDeviceError !== "empty") {
+      lastDeviceError = "empty";
+      logLine("device lookup returned empty — will retry while blank");
+    }
+  } catch (error) {
+    const message = String(error);
+    if (message !== lastDeviceError) {
+      lastDeviceError = message;
+      logLine(`device lookup failed: ${message}`);
+    }
+  } finally {
+    deviceFetching = false;
+  }
+}
+
 async function refresh(): Promise<void> {
   if (busy) return;
   if (!(await checkWarp())) return;
   try {
     const [status, identity, ip, mode] = await Promise.all([
       invoke<WarpStatus>("get_status"),
-      invoke<WarpIdentity>("get_identity").catch(() => null),
+      invoke<WarpIdentity>("get_identity").catch((error: unknown) => {
+        logLine(`device lookup failed: ${error}`);
+        return null;
+      }),
       fetchExitIp(),
       invoke<string>("get_mode").catch(() => null),
     ]);
     paintStatus(status);
     logHealth(status.reason);
-    el.device.textContent =
-      identity && identity.deviceId
-        ? `${identity.deviceId.slice(0, 8)}… (${identity.accountType || "?"})`
-        : "—";
+    paintDevice(identity);
     el.exitIp.textContent = ip;
     el.modeValue.textContent = mode ? (MODE_LABELS[mode] ?? mode) : "—";
     if (!modeAdopted) {
@@ -375,6 +409,9 @@ async function refreshStatus(): Promise<boolean> {
     const status = await invoke<WarpStatus>("get_status");
     paintStatus(status);
     logHealth(status.reason);
+    if (status.connected) {
+      await refreshDeviceIfBlank();
+    }
     return status.connected;
   } catch (error) {
     logLine(`status poll failed: ${error}`);
@@ -573,6 +610,9 @@ window.addEventListener("DOMContentLoaded", () => {
       if (!busy) {
         paintStatus(event.payload);
         logHealth(event.payload.reason);
+        if (event.payload.connected) {
+          void refreshDeviceIfBlank();
+        }
       }
     });
     await listen<string>("warp-ip", (event) => {
