@@ -2,7 +2,7 @@
 
 # Warper
 
-<img src="assets/warper-icon.png" alt="Warper icon" width="128" />
+<img src="assets/warper-icon.png" alt="Warper icon" width="140" />
 
 A simple GUI tool for cycling Cloudflare WARP exit IPs on Windows.
 
