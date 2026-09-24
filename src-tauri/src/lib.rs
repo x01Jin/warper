@@ -73,7 +73,8 @@ async fn emit_ip(app: &AppHandle) {
 }
 
 async fn locked(state: State<'_, WarpLock>) -> Result<tokio::sync::OwnedMutexGuard<()>, String> {
-    warp::require_admin(warp::is_elevated().await)?;
+    // No elevation gate: the app runs asInvoker and `warp-cli` talks to the
+    // warp-svc system service. This only serializes overlapping operations.
     state
         .0
         .clone()
@@ -338,7 +339,16 @@ pub fn run() {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 // Window starts hidden to avoid a flash when tray-starting.
-                let minimized = from_autostart && start_minimized(&handle).await;
+                let start_min = start_minimized(&handle).await;
+                let minimized = from_autostart && start_min;
+                if let Some(note) = repair_autostart_if_stale(&handle) {
+                    emit(&handle, &note);
+                }
+                let autostart = handle.autolaunch().is_enabled().unwrap_or(false);
+                emit(
+                    &handle,
+                    &format!("boot: autostart={autostart} from_autostart={from_autostart} start_minimized={start_min}"),
+                );
                 if !minimized {
                     show_main(&handle);
                 }
@@ -366,6 +376,90 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Read the `HKCU\...\Run\Warper` command written by the autostart plugin.
+#[cfg(windows)]
+fn run_command() -> Option<String> {
+    use windows::core::HSTRING;
+    use windows::Win32::Foundation::ERROR_SUCCESS;
+    use windows::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
+    };
+
+    let mut key = HKEY::default();
+    if unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            &HSTRING::from(r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"),
+            None,
+            KEY_READ,
+            &mut key,
+        )
+    } != ERROR_SUCCESS
+    {
+        return None;
+    }
+    let mut size = 0u32;
+    let sized = unsafe {
+        RegQueryValueExW(
+            key,
+            &HSTRING::from("Warper"),
+            None,
+            None,
+            None,
+            Some(&mut size),
+        )
+    } == ERROR_SUCCESS
+        && size > 0;
+    let mut buf = vec![0u8; size as usize];
+    let ok = sized
+        && unsafe {
+            RegQueryValueExW(
+                key,
+                &HSTRING::from("Warper"),
+                None,
+                None,
+                Some(buf.as_mut_ptr()),
+                Some(&mut size),
+            )
+        } == ERROR_SUCCESS;
+    unsafe {
+        let _ = RegCloseKey(key);
+    }
+    if !ok {
+        return None;
+    }
+    let (chunks, _) = buf.as_chunks::<2>();
+    let wide: Vec<u16> = chunks
+        .iter()
+        .take(size as usize / 2)
+        .map(|c| u16::from_le_bytes(*c))
+        .collect();
+    Some(
+        String::from_utf16_lossy(&wide)
+            .trim_matches('\0')
+            .trim()
+            .to_string(),
+    )
+}
+
+/// Re-register autostart when the stored Run command no longer points at this
+/// exe (portable moves leave a stale absolute path). Returns a log line on repair.
+fn repair_autostart_if_stale(app: &AppHandle) -> Option<String> {
+    if !app.autolaunch().is_enabled().unwrap_or(false) {
+        return None;
+    }
+    let current = std::env::current_exe()
+        .ok()?
+        .to_string_lossy()
+        .to_lowercase();
+    let stored = run_command()?;
+    if stored.to_lowercase().contains(&current) {
+        return None;
+    }
+    app.autolaunch().enable().ok()?;
+    Some(format!("autostart entry repaired (was: {stored})"))
 }
 
 /// Falls back to minimized when the store is unreadable during autostart.

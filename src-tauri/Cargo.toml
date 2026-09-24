@@ -60,7 +60,7 @@ incremental = true
 [profile.dev.package."*"]
 debug = false
 
-# Fast shipped builds for admin-feature testing. Same manifest/behavior as
+# Fast shipped builds. Same manifest/behavior as
 # release without the full LTO bill. Tauri CLI has no --profile flag, so use
 # build-fast.ps1 (env overrides) or: cargo build --profile dev-release
 [profile.dev-release]

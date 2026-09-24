@@ -4,7 +4,6 @@ use std::time::Duration;
 use tokio::process::Command;
 
 const WARP_TIMEOUT: Duration = Duration::from_secs(15);
-const HIGH_INTEGRITY_SID: &str = "S-1-16-12288";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -64,26 +63,6 @@ pub async fn run_warp(args: &[&str]) -> Result<String, String> {
         } else {
             stderr
         })
-    }
-}
-
-/// Mutations require elevation.
-pub async fn is_elevated() -> bool {
-    let output = Command::new("whoami")
-        .creation_flags(CREATE_NO_WINDOW)
-        .args(["/groups"])
-        .output()
-        .await
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-        .unwrap_or_default();
-    output.contains(HIGH_INTEGRITY_SID)
-}
-
-pub fn require_admin(elevated: bool) -> Result<(), String> {
-    if elevated {
-        Ok(())
-    } else {
-        Err("administrator rights required — restart Warper as administrator".to_string())
     }
 }
 

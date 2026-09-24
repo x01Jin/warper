@@ -12,10 +12,19 @@ rem   8. value HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\Warper
 rem   9. key HKCU\SOFTWARE\Classes\AppUserModelId\com.x01jin.warper
 rem  10. file %%APPDATA%%\Microsoft\Windows\Start Menu\Programs\Warper.lnk
 rem  11. files %%APPDATA%%\Microsoft\Windows\Recent\warper*
+rem  12. value HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run\Warper
+rem  13. file .warper-write-test beside this script (probe residue)
+rem  14. files %%LOCALAPPDATA%%\CrashDumps\warper.exe.*.dmp
+rem  15. files %%SystemRoot%%\Prefetch\WARPER*.pf
+rem  16. UserAssist values matching warper.exe ("warper" ROT13 = "jnicre")
+rem  17. MuiCache values whose path contains warper
+rem Out of scope (OS-owned or unsafe to delete per-app, left to Windows):
+rem   Amcache/Shimcache, notification platform DB, Jump-List hash blobs,
+rem   Chromium %%TEMP%% scoped dirs, icon/thumbnail caches.
 rem Cloudflare WARP itself is never touched. No WARP binaries, services,
-rem drivers, or accounts are removed. No network, no downloads, no blobs.
-rem Pure batch. The only external tools used are built-in commands:
-rem taskkill, tasklist, wmic for the --listen sweep, reg, del, rmdir.
+rem drivers, or accounts are removed. No network,downloads, and blobs.
+rem Batch plus built-in powershell for the registry sweeps. External tools
+rem used are all inbox: taskkill, tasklist, wmic, reg, del, rmdir, powershell.
 setlocal EnableExtensions EnableDelayedExpansion
 
 set "DRY=0"
@@ -35,9 +44,11 @@ if "%DRY%"=="1" goto :dry_run
 rem --- 0. Hard admin gate: no relaunch, fail fast -----------------------------
 net session >nul 2>&1
 if %errorlevel%==0 goto :have_admin
-echo [!!] Administrator rights required.
+echo [!!] This script must be run as administrator.
 echo Right-click cleanup-warper.bat and choose Run as administrator.
 echo Or open an elevated Command Prompt and run cleanup-warper.bat.
+echo.
+pause
 exit /b 1
 :have_admin
 
@@ -52,6 +63,9 @@ echo  - HKCU Run Warper value -- autostart entry
 echo  - HKCU AppUserModelId com.x01jin.warper key -- toast registration
 echo  - Start Menu Warper.lnk -- toast shortcut
 echo  - Recent warper links -- Explorer recent items
+echo  - StartupApproved Warper value -- Task Manager approval blob
+echo  - .warper-write-test probe residue, CrashDumps warper dumps, Prefetch WARPER entries
+echo  - UserAssist + MuiCache warper values -- Explorer execution traces
 echo.
 echo Press Y to delete, N to abort.
 choice /C YN /N
@@ -139,6 +153,38 @@ if %errorlevel%==0 (
 )
 call :del_retry "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Warper.lnk" "Start Menu Warper.lnk -- toast shortcut"
 call :del_retry "%APPDATA%\Microsoft\Windows\Recent\warper*" "Recent warper links -- Explorer recent items"
+reg delete "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" /v Warper /f >nul 2>&1
+if %errorlevel%==0 (
+  echo [ok] removed StartupApproved Warper value -- Task Manager approval blob
+) else (
+  echo [..] missing StartupApproved Warper value
+)
+call :del_retry "%~dp0.warper-write-test" ".warper-write-test -- probe residue"
+call :del_retry "%LOCALAPPDATA%\CrashDumps\warper.exe.*.dmp" "CrashDumps warper.exe.*.dmp -- crash dumps"
+dir /B "%SystemRoot%\Prefetch\WARPER*.pf" >nul 2>&1
+if %errorlevel%==0 (
+  del /F /Q "%SystemRoot%\Prefetch\WARPER*.pf" >nul 2>&1
+  echo [ok] removed Prefetch WARPER*.pf -- prefetch traces
+) else (
+  echo [..] missing Prefetch WARPER*.pf
+)
+
+rem --- 5. OS execution traces: UserAssist + MuiCache (per-Warper values only) --
+rem "warper" ROT13 = "jnicre", which also matches cleanup-warper.bat entries.
+set "SWEEP_N=0"
+for /f "delims=" %%N in ('powershell -NoProfile -NonInteractive -Command "$u='HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist'; $n=0; foreach ($t in Get-ChildItem $u -ErrorAction SilentlyContinue) { $k=$t.PSPath; foreach ($p in (Get-ItemProperty -Path $k -ErrorAction SilentlyContinue).PSObject.Properties) { if (($p.Name -notmatch '^PS') -and ($p.Name -match '(?i)jnicre')) { Remove-ItemProperty -Path $k -Name $p.Name -Force -ErrorAction SilentlyContinue; $n++ } } }; Write-Output $n" 2^>nul') do set "SWEEP_N=%%N"
+if "%SWEEP_N%"=="0" (
+  echo [..] no UserAssist warper entries
+) else (
+  echo [ok] removed %SWEEP_N% UserAssist warper entries -- Explorer run history
+)
+set "SWEEP_N=0"
+for /f "delims=" %%N in ('powershell -NoProfile -NonInteractive -Command "$k='HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache'; $n=0; $it=Get-Item -Path $k -ErrorAction SilentlyContinue; foreach ($p in $it.Property) { if ($p -match '(?i)warper') { Remove-ItemProperty -Path $k -Name $p -Force -ErrorAction SilentlyContinue; $n++ } }; Write-Output $n" 2^>nul') do set "SWEEP_N=%%N"
+if "%SWEEP_N%"=="0" (
+  echo [..] no MuiCache warper values
+) else (
+  echo [ok] removed %SWEEP_N% MuiCache warper values -- friendly-name cache
+)
 
 echo.
 echo Done. Cloudflare WARP was left untouched.
@@ -159,6 +205,12 @@ echo [dry] delete HKCU Run Warper value -- autostart entry
 echo [dry] delete HKCU AppUserModelId com.x01jin.warper key -- toast registration
 echo [dry] delete Start Menu Warper.lnk -- toast shortcut
 echo [dry] delete Recent warper links -- Explorer recent items
+echo [dry] delete HKCU StartupApproved Warper value -- approval blob
+echo [dry] delete .warper-write-test probe residue beside script
+echo [dry] delete CrashDumps warper.exe.*.dmp
+echo [dry] delete Prefetch WARPER*.pf
+echo [dry] sweep UserAssist warper entries via powershell (values matching JNICRE)
+echo [dry] sweep MuiCache warper values via powershell
 echo [dry] done -- nothing deleted
 exit /b 0
 

@@ -113,6 +113,7 @@ let warpMissing = false;
 let lastAutoRun = Date.now();
 let settings: Settings = { ...DEFAULTS };
 let store: Store | null = null;
+let storePath: string | null = null;
 let lastHealth: string | null = null;
 let modeAdopted = false;
 
@@ -176,19 +177,38 @@ function paintMissing(): void {
 
 async function persist(): Promise<void> {
   if (!store) return;
-  await store.set("autoReset", settings.autoReset);
-  await store.set("intervalMinutes", settings.intervalMinutes);
-  await store.set("startMinimized", settings.startMinimized);
-  await store.set("notifications", settings.notifications);
-  await store.set("ipHistory", settings.ipHistory);
-  await store.set("connectMode", settings.connectMode);
-  await store.set("standbyMode", settings.standbyMode);
-  await store.save();
+  try {
+    await ensureStore();
+    if (!store) return;
+    await store.set("autoReset", settings.autoReset);
+    await store.set("intervalMinutes", settings.intervalMinutes);
+    await store.set("startMinimized", settings.startMinimized);
+    await store.set("notifications", settings.notifications);
+    await store.set("ipHistory", settings.ipHistory);
+    await store.set("connectMode", settings.connectMode);
+    await store.set("standbyMode", settings.standbyMode);
+    await store.save();
+  } catch (error) {
+    logLine(`settings save failed: ${error}`);
+  }
+}
+
+/// Reload the store when the exe folder moved since boot (portable rename).
+/// The plugin binds a store handle to its absolute load path, so saving
+/// through a stale handle would recreate the old folder tree.
+async function ensureStore(): Promise<void> {
+  if (!store || !storePath) return;
+  const loc = await invoke<SettingsLocation>("get_settings_path");
+  if (loc.path === storePath) return;
+  store = await Store.load(loc.path);
+  storePath = loc.path;
+  logLine(`settings location moved — now saving to ${loc.path}`);
 }
 
 async function loadSettings(): Promise<void> {
   const loc = await invoke<SettingsLocation>("get_settings_path");
   store = await Store.load(loc.path);
+  storePath = loc.path;
   if (loc.portable) {
     logLine(`settings: ${loc.path}`);
   } else {
