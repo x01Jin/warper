@@ -1,0 +1,32 @@
+# Normalize line endings, keep Windows checkouts working
+* text=auto
+
+# Code and config always use LF in the repo
+*.ts text eol=lf
+*.tsx text eol=lf
+*.js text eol=lf
+*.jsx text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.rs text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Windows batch files keep CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Images and binaries are not text
+*.png binary
+*.ico binary
+*.icns binary
+*.zip binary
+*.msi binary
+*.exe binary
+
+# Keep lockfiles intact
+Cargo.lock -text
+package-lock.json -text

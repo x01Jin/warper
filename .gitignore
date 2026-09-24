@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+src-tauri/target/
+src-tauri/gen/schemas/
+build-fast.ps1
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Env and local config
+.env
+.env.*
+*.local
+*.tsbuildinfo
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.vscode/
+.ignore
+
+# TypeScript / Vite caches
+coverage/
+vite.config.ts.timestamp-*
+
+# Tauri
+*.AppImage
+*.dmg
+*.msi
+*.nsis.zip
+
+# Agent and index caches (local only)
+AGENTS.md
+opencode.json
+.codegraph/
+.opencode/
+
+# Private scratch notes
+notes/

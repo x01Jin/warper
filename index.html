@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#14161c" />
+    <title>Warper</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <main class="layout">
+      <header class="status-strip">
+        <div class="status-main">
+          <div class="state-line">
+            <span class="dot pulse" id="status-dot" aria-hidden="true"></span>
+            <h1 id="status-text" aria-live="polite">Checking…</h1>
+          </div>
+          <div class="readouts">
+            <div class="readout">
+              <span class="label">Device</span><span id="device-id" class="mono">—</span>
+            </div>
+            <div class="readout">
+              <span class="label">Exit IP</span><span id="exit-ip" class="mono">—</span>
+            </div>
+            <div class="readout">
+              <span class="label">WARP</span><span id="warp-version" class="mono">—</span>
+            </div>
+            <div class="readout">
+              <span class="label">Mode</span><span id="mode-value" class="mono">—</span>
+            </div>
+          </div>
+        </div>
+        <section class="sysbar panel" aria-label="Connection">
+          <label class="conn-row" for="connect-mode"
+            >Connect mode
+            <select id="connect-mode"></select>
+          </label>
+          <label class="conn-row" for="standby-mode"
+            >Standby mode
+            <select id="standby-mode"></select>
+          </label>
+        </section>
+      </header>
+
+      <section id="warp-banner" class="banner hidden" aria-live="polite">
+        <div class="banner-text">
+          <strong>WARP not found.</strong>
+          <span id="banner-detail"
+            >Warper needs Cloudflare WARP installed. Get it from the download page, then
+            Recheck.</span
+          >
+        </div>
+        <div class="banner-actions">
+          <button id="btn-download-page" class="ghost">Download page</button>
+        </div>
+      </section>
+
+      <div class="columns">
+        <div class="actions panel">
+          <button id="btn-quick" class="primary">Quick Reset</button>
+          <button id="btn-full" class="danger">Full Reset</button>
+          <div class="pair">
+            <button id="btn-connect" class="ghost">Connect</button>
+            <button id="btn-standby" class="ghost">Standby</button>
+          </div>
+          <div class="auto">
+            <label class="auto-head" for="auto-toggle">
+              <input type="checkbox" id="auto-toggle" />
+              <span>Auto Reset</span>
+              <span class="countdown" id="auto-countdown"></span>
+            </label>
+            <div class="segment" role="group" aria-label="Auto reset interval">
+              <button data-minutes="5">5m</button>
+              <button data-minutes="15" class="active">15m</button>
+              <button data-minutes="30">30m</button>
+              <button data-minutes="60">60m</button>
+            </div>
+          </div>
+          <div class="settings">
+            <h2>System</h2>
+            <label class="auto-head" for="autostart-toggle">
+              <input type="checkbox" id="autostart-toggle" />
+              <span>Start with Windows</span>
+            </label>
+            <div class="segment" role="group" aria-label="Startup behavior">
+              <button data-start="tray" class="active">Tray</button>
+              <button data-start="window">Window</button>
+            </div>
+            <label class="auto-head" for="notif-toggle">
+              <input type="checkbox" id="notif-toggle" checked />
+              <span>Notifications</span>
+            </label>
+            <h2>Exit IP history</h2>
+            <ul id="ip-history" class="ip-history"></ul>
+          </div>
+        </div>
+
+        <section class="terminal" aria-label="Event log">
+          <div class="term-head">
+            <span>Log</span>
+            <button id="btn-clear" class="term-clear">Clear</button>
+          </div>
+          <pre id="log" aria-live="polite"></pre>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

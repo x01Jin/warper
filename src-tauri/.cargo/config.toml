@@ -1,0 +1,6 @@
+# Windows-only project: link with the toolchain-bundled LLD instead of MSVC
+# link.exe. Prerequisite (one time): rustup component add llvm-tools
+# Expected: ~2x faster full links, ~5x faster incremental re-links.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"
+rustdocflags = ["-Clinker=rust-lld.exe"]

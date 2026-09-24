@@ -1,0 +1,29 @@
+{
+  "name": "warper",
+  "version": "0.1.0",
+  "private": true,
+  "license": "CC-BY-NC-SA-4.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "build:frontend": "vite build",
+    "lint": "oxlint --deny-warnings",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-notification": "^2.4.0",
+    "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-store": "^2.4.5"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "oxfmt": "^0.70.0",
+    "oxlint": "^1.85.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.0.16"
+  }
+}
