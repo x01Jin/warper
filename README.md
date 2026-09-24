@@ -65,6 +65,26 @@ Left alone: Amcache/Shimcache, the notification platform DB, Jump-List hash blob
 
 Virus Total scan: https://www.virustotal.com/gui/file/7b40aee8f25cac91dcdb5a6484d1dac1252af7ebe95555754229b673efa58949/detection
 
+## Installation and setup
+
+- Download the latest release from the [releases page](https://github.com/x01Jin/warper/releases).
+- Install the Cloudflare WARP Windows client from [Cloudflare](https://one.one.one.one/) if you haven't already.
+- Run `warper.exe` and it will check for WARP and prompt you to install it if missing.
+- If you notice when you're doing a reset the cloudflare one client window apears, it happens when doing a reset.
+
+For the auto resetting problem where the cloudflare one client appears completely disrupting you, you can follow this guide:
+
+- Exit cloudflare one client in tray and it will notify you that all of it's processes will be killed, click okay
+- Now you will notice in warper that you are disconnected and connecting doesnt work, that's okay just do a full reset
+- After that the tool will now function normally and the cloudflare one client will not appear again anymore.
+
+From this point on is upto your preference if you want to keep the cloudflare one client running in the background or not, You can just leave it as is right now and it will not appear again until you restart your pc, but if you want to completely disable it from starting up again you can:
+
+- Disable cloudflare one client startup in task manager to prevent it from starting up again.
+- I recommend to sometimes open cloudflare one client to check for updates though...
+
+In warper you can customize the connection modes like in cloudflare one client alongside with it's own features.
+
 ## License
 
 Copyright (c) 2026 x01Jin. Shared under CC BY-NC-SA 4.0. See LICENSE. That means you can copy and adapt it for non-commercial use if you credit x01Jin and share your version under the same terms.
