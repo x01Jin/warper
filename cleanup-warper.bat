@@ -8,9 +8,9 @@ rem   4. file warper-settings.json beside this script
 rem   5. dir warper.exe.WebView2 beside this script
 rem   6. dir %%LOCALAPPDATA%%\com.x01jin.warper
 rem   7. dir %%APPDATA%%\com.x01jin.warper
-rem   8. legacy dir %%LOCALAPPDATA%%\com.warper.app (pre-rename orphan)
-rem   9. legacy dir %%APPDATA%%\com.warper.app (pre-rename orphan)
-rem  10. value HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\Warper
+rem   8. value HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\Warper
+rem   9. key HKCU\SOFTWARE\Classes\AppUserModelId\com.x01jin.warper
+rem  10. file %%APPDATA%%\Microsoft\Windows\Start Menu\Programs\Warper.lnk
 rem  11. files %%APPDATA%%\Microsoft\Windows\Recent\warper*
 rem Cloudflare WARP itself is never touched. No WARP binaries, services,
 rem drivers, or accounts are removed. No network, no downloads, no blobs.
@@ -48,9 +48,9 @@ echo  - %~dp0warper-settings.json -- portable settings file
 echo  - %~dp0warper.exe.WebView2 -- portable WebView2 data
 echo  - %%LOCALAPPDATA%%\com.x01jin.warper -- WebView2 profile
 echo  - %%APPDATA%%\com.x01jin.warper -- settings and logs
-echo  - %%LOCALAPPDATA%%\com.warper.app -- old identifier orphan
-echo  - %%APPDATA%%\com.warper.app -- old identifier orphan
 echo  - HKCU Run Warper value -- autostart entry
+echo  - HKCU AppUserModelId com.x01jin.warper key -- toast registration
+echo  - Start Menu Warper.lnk -- toast shortcut
 echo  - Recent warper links -- Explorer recent items
 echo.
 echo Press Y to delete, N to abort.
@@ -125,14 +125,19 @@ call :del_retry "%~dp0warper-settings.json" "%~dp0warper-settings.json -- portab
 call :rmdir_retry "%~dp0warper.exe.WebView2" "%~dp0warper.exe.WebView2 -- portable WebView2 data"
 call :rmdir_retry "%LOCALAPPDATA%\com.x01jin.warper" "%%LOCALAPPDATA%%\com.x01jin.warper -- WebView2 profile"
 call :rmdir_retry "%APPDATA%\com.x01jin.warper" "%%APPDATA%%\com.x01jin.warper -- settings and logs"
-call :rmdir_retry "%LOCALAPPDATA%\com.warper.app" "%%LOCALAPPDATA%%\com.warper.app -- old identifier orphan"
-call :rmdir_retry "%APPDATA%\com.warper.app" "%%APPDATA%%\com.warper.app -- old identifier orphan"
 reg delete "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v Warper /f >nul 2>&1
 if %errorlevel%==0 (
   echo [ok] removed HKCU Run Warper value -- autostart entry
 ) else (
   echo [..] missing HKCU Run Warper value -- autostart entry
 )
+reg delete "HKCU\SOFTWARE\Classes\AppUserModelId\com.x01jin.warper" /f >nul 2>&1
+if %errorlevel%==0 (
+  echo [ok] removed HKCU AppUserModelId com.x01jin.warper key -- toast registration
+) else (
+  echo [..] missing HKCU AppUserModelId com.x01jin.warper key -- toast registration
+)
+call :del_retry "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Warper.lnk" "Start Menu Warper.lnk -- toast shortcut"
 call :del_retry "%APPDATA%\Microsoft\Windows\Recent\warper*" "Recent warper links -- Explorer recent items"
 
 echo.
@@ -150,9 +155,9 @@ echo [dry] delete %~dp0warper-settings.json -- portable settings file
 echo [dry] remove %~dp0warper.exe.WebView2 -- portable WebView2 data
 echo [dry] remove %%LOCALAPPDATA%%\com.x01jin.warper -- WebView2 profile
 echo [dry] remove %%APPDATA%%\com.x01jin.warper -- settings and logs
-echo [dry] remove %%LOCALAPPDATA%%\com.warper.app -- old identifier orphan
-echo [dry] remove %%APPDATA%%\com.warper.app -- old identifier orphan
 echo [dry] delete HKCU Run Warper value -- autostart entry
+echo [dry] delete HKCU AppUserModelId com.x01jin.warper key -- toast registration
+echo [dry] delete Start Menu Warper.lnk -- toast shortcut
 echo [dry] delete Recent warper links -- Explorer recent items
 echo [dry] done -- nothing deleted
 exit /b 0

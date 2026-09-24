@@ -1,3 +1,4 @@
+mod aumid;
 mod warp;
 
 use std::process::Stdio;
@@ -330,6 +331,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(WarpLock(Arc::new(tokio::sync::Mutex::new(()))))
         .setup(move |app| {
+            // Register the toast identity before anything can notify.
+            aumid::ensure_aumid(app.handle());
             let _ = build_tray(app.handle());
             spawn_status_watcher(app.handle().clone());
             let handle = app.handle().clone();
