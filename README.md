@@ -62,6 +62,8 @@ What it does, in order:
 
 Left alone: Amcache/Shimcache, the notification platform DB, Jump-List hash blobs, Chromium `%TEMP%` scoped dirs, and icon/thumbnail caches. Those are OS-owned or unsafe to delete per-app, so Windows keeps managing them.
 
+Virus Total scan: https://www.virustotal.com/gui/file/7b40aee8f25cac91dcdb5a6484d1dac1252af7ebe95555754229b673efa58949/detection
+
 ## License
 
 Copyright (c) 2026 x01Jin. Shared under CC BY-NC-SA 4.0. See LICENSE. That means you can copy and adapt it for non-commercial use if you credit x01Jin and share your version under the same terms.
