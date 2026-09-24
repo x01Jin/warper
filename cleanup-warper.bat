@@ -4,7 +4,7 @@ rem Scope, exact:
 rem   1. warper.exe process tree
 rem   2. orphaned warp-cli.exe --listen listeners spawned by Warper
 rem   3. residual warp-cli.exe processes outliving Warper
-rem   4. file warper-settings.json beside this script
+rem   4. files warper-config.json and warper.log beside this script
 rem   5. dir warper.exe.WebView2 beside this script
 rem   6. dir %%LOCALAPPDATA%%\com.x01jin.warper
 rem   7. dir %%APPDATA%%\com.x01jin.warper
@@ -55,7 +55,8 @@ exit /b 1
 rem --- 1. Confirm unless --yes -------------------------------------------------
 if "%AUTOYES%"=="1" goto :kill_phase
 echo This will delete all Warper traces:
-echo  - %~dp0warper-settings.json -- portable settings file
+echo  - %~dp0warper-config.json -- portable settings file
+echo  - %~dp0warper.log -- portable encrypted log and IP history
 echo  - %~dp0warper.exe.WebView2 -- portable WebView2 data
 echo  - %%LOCALAPPDATA%%\com.x01jin.warper -- WebView2 profile
 echo  - %%APPDATA%%\com.x01jin.warper -- settings and logs
@@ -135,7 +136,8 @@ echo [ok] all Warper processes are gone
 echo.
 
 rem --- 4. Delete phase, per-item ok/missing ------------------------------------
-call :del_retry "%~dp0warper-settings.json" "%~dp0warper-settings.json -- portable settings file"
+call :del_retry "%~dp0warper-config.json" "%~dp0warper-config.json -- portable settings file"
+call :del_retry "%~dp0warper.log" "%~dp0warper.log -- portable encrypted log and IP history"
 call :rmdir_retry "%~dp0warper.exe.WebView2" "%~dp0warper.exe.WebView2 -- portable WebView2 data"
 call :rmdir_retry "%LOCALAPPDATA%\com.x01jin.warper" "%%LOCALAPPDATA%%\com.x01jin.warper -- WebView2 profile"
 call :rmdir_retry "%APPDATA%\com.x01jin.warper" "%%APPDATA%%\com.x01jin.warper -- settings and logs"
@@ -197,7 +199,8 @@ echo [dry] kill warper.exe process tree -- taskkill /F /IM warper.exe /T
 echo [dry] sweep orphaned warp-cli.exe --listen listeners via wmic
 echo [dry] sweep residual warp-cli.exe processes
 echo [dry] verify all Warper processes are gone before deletion
-echo [dry] delete %~dp0warper-settings.json -- portable settings file
+echo [dry] delete %~dp0warper-config.json -- portable settings file
+echo [dry] delete %~dp0warper.log -- portable encrypted log and IP history
 echo [dry] remove %~dp0warper.exe.WebView2 -- portable WebView2 data
 echo [dry] remove %%LOCALAPPDATA%%\com.x01jin.warper -- WebView2 profile
 echo [dry] remove %%APPDATA%%\com.x01jin.warper -- settings and logs

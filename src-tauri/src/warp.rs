@@ -116,7 +116,6 @@ pub const ALLOW_MODES: [&str; 7] = [
     "tunnel_only",
 ];
 
-/// Map the `Mode:` value from `warp-cli settings` to a `warp-cli mode` arg.
 pub fn parse_mode(text: &str) -> Result<String, String> {
     let raw = text
         .lines()
@@ -159,7 +158,6 @@ pub async fn set_mode(mode: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Never errors; missing binaries report `installed: false`.
 pub async fn warp_info() -> WarpInfo {
     let path = warp_cli_path();
     match run_warp(&["--version"]).await {
@@ -204,10 +202,22 @@ fn parse_plain_ip(text: &str) -> Option<String> {
     }
 }
 
-/// Current public exit IP, mirroring the frontend's sources.
-/// Never errors; total failure reports `"unreachable"`.
 pub async fn fetch_exit_ip() -> String {
-    let Ok(client) = reqwest::Client::builder().timeout(IP_TIMEOUT).build() else {
+    fn http_client() -> Option<reqwest::Client> {
+        static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+        if let Some(client) = CLIENT.get() {
+            return Some(client.clone());
+        }
+        match reqwest::Client::builder().timeout(IP_TIMEOUT).build() {
+            Ok(client) => {
+                let _ = CLIENT.set(client.clone());
+                Some(client)
+            }
+            Err(_) => None,
+        }
+    }
+
+    let Some(client) = http_client() else {
         return "unreachable".to_string();
     };
     if let Ok(resp) = client

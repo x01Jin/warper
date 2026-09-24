@@ -1,10 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import {
-  isPermissionGranted,
-  requestPermission,
-  sendNotification,
-} from "@tauri-apps/plugin-notification";
+import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Store } from "@tauri-apps/plugin-store";
 
@@ -37,7 +33,11 @@ interface IpEntry {
 interface SettingsLocation {
   path: string;
   portable: boolean;
-  imported: boolean;
+}
+
+interface LogState {
+  history: IpEntry[];
+  lines: string[];
 }
 
 interface Settings {
@@ -45,18 +45,15 @@ interface Settings {
   intervalMinutes: number;
   startMinimized: boolean;
   notifications: boolean;
-  ipHistory: IpEntry[];
   connectMode: string;
   standbyMode: string;
 }
 
-const IP_TIMEOUT_MS = 8_000;
-const IP_BACKSTOP_MS = 60_000;
-const STATUS_POLL_MS = 5_000;
+const STATUS_POLL_MS = 15_000;
+const COUNTDOWN_RESYNC_MS = 30_000;
 const SETTLE_RETRIES = 12;
 const SETTLE_PAUSE_MS = 2_000;
 const MAX_LOG_LINES = 200;
-const MAX_IP_HISTORY = 10;
 const VALID_INTERVALS = [5, 15, 30, 60];
 const VALID_CONNECT_MODES = ["warp", "doh", "warp+doh", "dot", "warp+dot", "proxy", "tunnel_only"];
 const VALID_STANDBY_MODES = [...VALID_CONNECT_MODES, "off"];
@@ -76,7 +73,6 @@ const DEFAULTS: Settings = {
   intervalMinutes: 15,
   startMinimized: true,
   notifications: true,
-  ipHistory: [],
   connectMode: "warp",
   standbyMode: "doh",
 };
@@ -110,7 +106,6 @@ const el = {
 
 let busy = false;
 let warpMissing = false;
-let lastAutoRun = Date.now();
 let settings: Settings = { ...DEFAULTS };
 let store: Store | null = null;
 let storePath: string | null = null;
@@ -118,6 +113,12 @@ let lastHealth: string | null = null;
 let modeAdopted = false;
 let deviceFetching = false;
 let lastDeviceError: string | null = null;
+let lastCountdownText: string | null = null;
+let fireAtMs: number | null = null;
+
+const logBuffer: string[] = [];
+let lastLogMessage: string | null = null;
+let lastLogCount = 0;
 
 function logHealth(reason: string): void {
   if (reason === lastHealth) return;
@@ -125,24 +126,22 @@ function logHealth(reason: string): void {
   logLine(`Health: ${reason || "—"}`);
 }
 
-function logLine(message: string): void {
+function logLine(message: string, forward = true): void {
   const time = new Date().toLocaleTimeString();
-  const lines = el.log.textContent ? el.log.textContent.split("\n") : [];
-  lines.push(`[${time}] ${message}`);
-  el.log.textContent = lines.slice(-MAX_LOG_LINES).join("\n");
-  el.log.scrollTop = el.log.scrollHeight;
-}
-
-async function notify(title: string, body: string): Promise<void> {
-  if (!settings.notifications) return;
-  try {
-    if (!(await isPermissionGranted())) {
-      if ((await requestPermission()) !== "granted") return;
+  if (message === lastLogMessage) {
+    lastLogCount += 1;
+    logBuffer[logBuffer.length - 1] = `[${time}] ${message} (x${lastLogCount})`;
+  } else {
+    lastLogMessage = message;
+    lastLogCount = 1;
+    logBuffer.push(`[${time}] ${message}`);
+    if (logBuffer.length > MAX_LOG_LINES) {
+      logBuffer.splice(0, logBuffer.length - MAX_LOG_LINES);
     }
-    sendNotification({ title, body });
-  } catch {
-    // Best-effort; failures already surface in the log.
   }
+  el.log.textContent = logBuffer.join("\n");
+  el.log.scrollTop = el.log.scrollHeight;
+  if (forward) void invoke("append_log", { message }).catch(() => undefined);
 }
 
 function updateButtons(): void {
@@ -163,8 +162,16 @@ function setBusy(value: boolean): void {
 }
 
 function paintStatus(status: WarpStatus): void {
-  el.dot.className = `dot pulse ${status.connected ? "on" : "off"}`;
-  el.statusText.textContent = status.connected ? "Connected" : status.status;
+  if (status.connected) {
+    el.dot.className = "dot pulse on";
+    el.statusText.textContent = "Connected";
+  } else if (status.status.toLowerCase() === "disconnected") {
+    el.dot.className = "dot off";
+    el.statusText.textContent = "Disconnected";
+  } else {
+    el.dot.className = "dot warn";
+    el.statusText.textContent = status.status || "Connecting";
+  }
 }
 
 function paintMissing(): void {
@@ -186,7 +193,6 @@ async function persist(): Promise<void> {
     await store.set("intervalMinutes", settings.intervalMinutes);
     await store.set("startMinimized", settings.startMinimized);
     await store.set("notifications", settings.notifications);
-    await store.set("ipHistory", settings.ipHistory);
     await store.set("connectMode", settings.connectMode);
     await store.set("standbyMode", settings.standbyMode);
     await store.save();
@@ -195,9 +201,6 @@ async function persist(): Promise<void> {
   }
 }
 
-/// Reload the store when the exe folder moved since boot (portable rename).
-/// The plugin binds a store handle to its absolute load path, so saving
-/// through a stale handle would recreate the old folder tree.
 async function ensureStore(): Promise<void> {
   if (!store || !storePath) return;
   const loc = await invoke<SettingsLocation>("get_settings_path");
@@ -216,14 +219,10 @@ async function loadSettings(): Promise<void> {
   } else {
     logLine(`settings (exe folder is read-only): ${loc.path}`);
   }
-  if (loc.imported) {
-    logLine("imported previous settings from app data");
-  }
   const auto = await store.get<boolean>("autoReset");
   const mins = await store.get<number>("intervalMinutes");
   const minimized = await store.get<boolean>("startMinimized");
   const notifications = await store.get<boolean>("notifications");
-  const history = await store.get<IpEntry[]>("ipHistory");
   const connectMode = await store.get<string>("connectMode");
   const standbyMode = await store.get<string>("standbyMode");
   const hasKeys = await store.has("autoReset");
@@ -233,14 +232,12 @@ async function loadSettings(): Promise<void> {
   }
   if (typeof minimized === "boolean") settings.startMinimized = minimized;
   if (typeof notifications === "boolean") settings.notifications = notifications;
-  if (Array.isArray(history)) settings.ipHistory = history.slice(0, MAX_IP_HISTORY);
   if (typeof connectMode === "string" && VALID_CONNECT_MODES.includes(connectMode)) {
     settings.connectMode = connectMode;
   }
   if (typeof standbyMode === "string" && VALID_STANDBY_MODES.includes(standbyMode)) {
     settings.standbyMode = standbyMode;
   }
-  // Migrate legacy localStorage settings once.
   if (!hasKeys && localStorage.getItem("warper.migrated") !== "1") {
     settings.autoReset = localStorage.getItem("warper.auto") === "1";
     const legacy = Number(localStorage.getItem("warper.interval") ?? "15");
@@ -251,22 +248,11 @@ async function loadSettings(): Promise<void> {
 }
 
 async function fetchExitIp(): Promise<string> {
-  const sources = ["https://api.cloudflare.com/cdn-cgi/trace", "https://ifconfig.me/ip"];
-  for (const url of sources) {
-    try {
-      const response = await fetch(url, {
-        signal: AbortSignal.timeout(IP_TIMEOUT_MS),
-      });
-      if (!response.ok) continue;
-      const text = (await response.text()).trim();
-      const ipMatch = text.match(/ip=([^\s]+)/);
-      const ip = ipMatch ? ipMatch[1] : text.split("\n")[0].trim();
-      if (ip) return ip;
-    } catch {
-      continue;
-    }
+  try {
+    return await invoke<string>("get_exit_ip");
+  } catch {
+    return "unreachable";
   }
-  return "unreachable";
 }
 
 function buildModeOptions(): void {
@@ -290,32 +276,35 @@ function buildModeOptions(): void {
   el.standbyMode.appendChild(off);
 }
 
-function paintIpHistory(): void {
+function paintIpHistory(entries: IpEntry[]): void {
   el.ipHistory.innerHTML = "";
-  for (const entry of settings.ipHistory) {
+  for (const entry of entries) {
     const li = document.createElement("li");
     li.textContent = `${entry.ip} — ${new Date(entry.at).toLocaleTimeString()}`;
     el.ipHistory.appendChild(li);
   }
 }
 
-async function recordIp(ip: string): Promise<void> {
-  if (!ip || ip === "unreachable") return;
-  const old = settings.ipHistory[0]?.ip;
-  if (old === ip) return;
-  settings.ipHistory = [{ ip, at: Date.now() }, ...settings.ipHistory].slice(0, MAX_IP_HISTORY);
-  paintIpHistory();
-  await persist();
-  if (old) {
-    await notify("Warper", `Exit IP changed: ${old} → ${ip}`);
+async function paintIpHistoryFromVault(): Promise<void> {
+  try {
+    const state = await invoke<LogState>("get_log_state");
+    paintIpHistory(state.history);
+  } catch (error) {
+    logLine(`history load failed: ${error}`);
   }
 }
 
-async function refreshIp(): Promise<void> {
-  if (busy || warpMissing) return;
-  const ip = await fetchExitIp();
-  el.exitIp.textContent = ip;
-  await recordIp(ip);
+async function loadLogState(): Promise<void> {
+  try {
+    const state = await invoke<LogState>("get_log_state");
+    logBuffer.length = 0;
+    logBuffer.push(...state.lines.slice(-MAX_LOG_LINES));
+    el.log.textContent = logBuffer.join("\n");
+    el.log.scrollTop = el.log.scrollHeight;
+    paintIpHistory(state.history);
+  } catch (error) {
+    logLine(`log load failed: ${error}`);
+  }
 }
 
 async function checkWarp(): Promise<boolean> {
@@ -343,7 +332,6 @@ function paintDevice(identity: WarpIdentity | null): void {
       : "—";
 }
 
-/// Re-fetch `registration show` only while Device is still blank.
 async function refreshDeviceIfBlank(): Promise<void> {
   if (busy || warpMissing || deviceFetching) return;
   if (el.device.textContent !== "—") return;
@@ -385,6 +373,7 @@ async function refresh(): Promise<void> {
     logHealth(status.reason);
     paintDevice(identity);
     el.exitIp.textContent = ip;
+    await paintIpHistoryFromVault();
     el.modeValue.textContent = mode ? (MODE_LABELS[mode] ?? mode) : "—";
     if (!modeAdopted) {
       modeAdopted = true;
@@ -395,7 +384,6 @@ async function refresh(): Promise<void> {
         await persist();
       }
     }
-    await recordIp(ip);
   } catch (error) {
     el.dot.className = "dot off";
     el.statusText.textContent = "Error";
@@ -404,7 +392,7 @@ async function refresh(): Promise<void> {
 }
 
 async function refreshStatus(): Promise<boolean> {
-  if (busy || warpMissing) return false;
+  if (busy || warpMissing || document.hidden) return false;
   try {
     const status = await invoke<WarpStatus>("get_status");
     paintStatus(status);
@@ -445,9 +433,10 @@ async function runOp(
     logLine(`${label} failed: ${error}`);
   } finally {
     setBusy(false);
-    lastAutoRun = Date.now();
+    await invoke("reset_auto_timer");
     await settleStatus();
     await refresh();
+    await resyncCountdown();
   }
 }
 
@@ -465,19 +454,31 @@ function paintStartSegment(): void {
   }
 }
 
-function tickAuto(): void {
-  if (!settings.autoReset || busy || warpMissing) return;
-  const remaining = settings.intervalMinutes * 60_000 - (Date.now() - lastAutoRun);
-  if (remaining <= 0) {
-    el.countdown.textContent = "";
-    void runOp("auto quick-reset", "quick_reset", {
-      connectMode: settings.connectMode,
-    });
-  } else {
-    const minutes = Math.floor(remaining / 60_000);
-    const seconds = Math.floor((remaining % 60_000) / 1000);
-    el.countdown.textContent = `${minutes}:${String(seconds).padStart(2, "0")}`;
+function paintCountdown(totalSecs: number): void {
+  const text =
+    totalSecs < 0 ? "" : `${Math.floor(totalSecs / 60)}:${String(totalSecs % 60).padStart(2, "0")}`;
+  if (text !== lastCountdownText) {
+    lastCountdownText = text;
+    el.countdown.textContent = text;
   }
+}
+
+async function resyncCountdown(): Promise<void> {
+  if (!settings.autoReset) {
+    fireAtMs = null;
+    paintCountdown(-1);
+    return;
+  }
+  try {
+    const secs = await invoke<number>("auto_countdown");
+    fireAtMs = secs < 0 ? null : Date.now() + secs * 1000;
+    paintCountdown(secs);
+  } catch {}
+}
+
+function tickCountdown(): void {
+  if (!settings.autoReset || fireAtMs === null || document.hidden) return;
+  paintCountdown(Math.max(0, Math.round((fireAtMs - Date.now()) / 1000)));
 }
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -490,7 +491,6 @@ window.addEventListener("DOMContentLoaded", () => {
     el.standbyMode.value = settings.standbyMode;
     paintSegment();
     paintStartSegment();
-    paintIpHistory();
     try {
       el.autostartToggle.checked = await invoke<boolean>("get_autostart");
     } catch (error) {
@@ -525,7 +525,11 @@ window.addEventListener("DOMContentLoaded", () => {
         }),
     );
     document.querySelector("#btn-clear")?.addEventListener("click", () => {
+      logBuffer.length = 0;
+      lastLogMessage = null;
+      lastLogCount = 0;
       el.log.textContent = "";
+      void invoke("clear_log").catch(() => undefined);
     });
     document.querySelector("#btn-download-page")?.addEventListener("click", () => {
       openUrl(WARP_DOWNLOAD_PAGE).catch((error: unknown) => {
@@ -535,19 +539,18 @@ window.addEventListener("DOMContentLoaded", () => {
 
     el.autoToggle.addEventListener("change", () => {
       settings.autoReset = el.autoToggle.checked;
-      lastAutoRun = Date.now();
       el.countdown.textContent = "";
+      lastCountdownText = "";
       logLine(`auto reset ${settings.autoReset ? "enabled" : "disabled"}`);
-      void persist();
+      void persist().then(() => invoke("reset_auto_timer"));
     });
     for (const button of el.segment) {
       button.addEventListener("click", () => {
         const mins = Number(button.dataset.minutes ?? "15");
         if (VALID_INTERVALS.includes(mins)) {
           settings.intervalMinutes = mins;
-          lastAutoRun = Date.now();
           paintSegment();
-          void persist();
+          void persist().then(() => invoke("reset_auto_timer"));
         }
       });
     }
@@ -587,9 +590,7 @@ window.addEventListener("DOMContentLoaded", () => {
                 logLine("notifications blocked by the OS — allow Warper in Windows Settings");
               }
             }
-          } catch {
-            // Best-effort; the next toast attempt retries.
-          }
+          } catch {}
         })();
       }
     });
@@ -604,7 +605,7 @@ window.addEventListener("DOMContentLoaded", () => {
       void persist();
     });
     await listen<Progress>("warp-progress", (event) => {
-      logLine(event.payload.step);
+      logLine(event.payload.step, false);
     });
     await listen<WarpStatus>("warp-status", (event) => {
       if (!busy) {
@@ -616,7 +617,8 @@ window.addEventListener("DOMContentLoaded", () => {
       }
     });
     await listen<string>("warp-ip", (event) => {
-      void recordIp(event.payload);
+      el.exitIp.textContent = event.payload;
+      void paintIpHistoryFromVault();
     });
     await listen("warp-missing", () => {
       warpMissing = true;
@@ -624,9 +626,16 @@ window.addEventListener("DOMContentLoaded", () => {
       paintMissing();
     });
 
+    await loadLogState();
     await refresh();
-    setInterval(() => void refreshIp(), IP_BACKSTOP_MS);
+    await resyncCountdown();
+    document.addEventListener("visibilitychange", () => {
+      document.body.classList.toggle("suspended", document.hidden);
+      if (!document.hidden) void resyncCountdown();
+    });
+    document.body.classList.toggle("suspended", document.hidden);
     setInterval(() => void refreshStatus(), STATUS_POLL_MS);
-    setInterval(tickAuto, 1000);
+    setInterval(tickCountdown, 1000);
+    setInterval(() => void resyncCountdown(), COUNTDOWN_RESYNC_MS);
   })();
 });

@@ -43,7 +43,8 @@ What it does, in order:
 2. Kills orphaned `warp-cli.exe --listen` listeners Warper started.
 3. Sweeps any remaining `warp-cli.exe` processes, then stops if anything survived so no locked files are deleted half-way.
 4. Deletes files and folders:
-   - `warper-settings.json` beside the script (portable settings).
+   - `warper-config.json` beside the script (portable settings).
+   - `warper.log` beside the script (portable encrypted log).
    - `warper.exe.WebView2` beside the script (portable WebView2 data).
    - `%LOCALAPPDATA%\com.x01jin.warper` (WebView2 profile).
    - `%APPDATA%\com.x01jin.warper` (settings and logs).

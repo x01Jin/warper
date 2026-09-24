@@ -1,9 +1,10 @@
 mod aumid;
+mod vault;
 mod warp;
 
 use std::process::Stdio;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
@@ -11,34 +12,35 @@ use warp::{WarpIdentity, WarpInfo, WarpStatus};
 
 pub(crate) struct WarpLock(pub(crate) Arc<tokio::sync::Mutex<()>>);
 
-/// Settings file name, shared by the store path and the cleanup script.
-pub(crate) const SETTINGS_FILE: &str = "warper-settings.json";
+pub(crate) struct AutoState(pub(crate) Mutex<Instant>);
+
+pub(crate) struct WindowBuildLock(pub(crate) Mutex<()>);
+
+pub(crate) struct VaultWarned(pub(crate) Mutex<bool>);
+
+fn note_op(app: &AppHandle) {
+    if let Ok(mut last) = app.state::<AutoState>().0.lock() {
+        *last = Instant::now();
+    }
+}
+
+pub(crate) const SETTINGS_FILE: &str = "warper-config.json";
+pub(crate) const LOG_FILE: &str = "warper.log";
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SettingsLocation {
     path: String,
     portable: bool,
-    imported: bool,
 }
 
-/// Portable exe folder when writable, else the app-data dir.
-pub(crate) fn settings_path(app: &AppHandle) -> (std::path::PathBuf, bool, bool) {
-    let mut imported = false;
+pub(crate) fn settings_path(app: &AppHandle) -> (std::path::PathBuf, bool) {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let probe = dir.join(".warper-write-test");
             if std::fs::write(&probe, b"").is_ok() {
                 let _ = std::fs::remove_file(&probe);
-                let candidate = dir.join(SETTINGS_FILE);
-                if !candidate.exists() {
-                    if let Ok(legacy) = app.path().app_data_dir().map(|d| d.join("settings.json")) {
-                        if legacy.exists() && std::fs::copy(&legacy, &candidate).is_ok() {
-                            imported = true;
-                        }
-                    }
-                }
-                return (candidate, true, imported);
+                return (dir.join(SETTINGS_FILE), true);
             }
         }
     }
@@ -47,7 +49,12 @@ pub(crate) fn settings_path(app: &AppHandle) -> (std::path::PathBuf, bool, bool)
         .app_data_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."))
         .join(SETTINGS_FILE);
-    (fallback, false, imported)
+    (fallback, false)
+}
+
+pub(crate) fn log_path(app: &AppHandle) -> std::path::PathBuf {
+    let (settings, _) = settings_path(app);
+    settings.with_file_name(LOG_FILE)
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -63,18 +70,147 @@ pub(crate) fn emit(app: &AppHandle, step: &str) {
             step: step.to_string(),
         },
     );
+    vault_push(app, step);
 }
 
-/// Push the fresh exit IP so the frontend can toast on change.
-/// The frontend owns dedupe, history, the settings gate, and OS permission.
-async fn emit_ip(app: &AppHandle) {
+fn vault_warn(app: &AppHandle, message: &str) {
+    if let Ok(mut warned) = app.state::<VaultWarned>().0.lock() {
+        if !*warned {
+            *warned = true;
+            emit(app, message);
+        }
+    }
+}
+
+fn vault_save(app: &AppHandle, data: &vault::VaultData) {
+    if vault::save(&log_path(app), data).is_err() {
+        vault_warn(app, "log save failed");
+    }
+}
+
+fn vault_push(app: &AppHandle, message: &str) {
+    let mut data = vault::load(&log_path(app));
+    vault::push_line_data(&mut data, message);
+    vault_save(app, &data);
+}
+
+fn vault_clear(app: &AppHandle) {
+    let mut data = vault::load(&log_path(app));
+    data.lines.clear();
+    vault_save(app, &data);
+}
+
+fn read_history(app: &AppHandle) -> Vec<vault::SealedEntry> {
+    use tauri_plugin_store::StoreExt;
+    let (path, _) = settings_path(app);
+    app.store(path)
+        .ok()
+        .and_then(|store| store.get("ipHistory"))
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default()
+}
+
+fn write_history(app: &AppHandle, list: &[vault::SealedEntry]) {
+    use tauri_plugin_store::StoreExt;
+    let (path, _) = settings_path(app);
+    let Some(store) = app.store(path).ok() else {
+        vault_warn(app, "history save failed");
+        return;
+    };
+    let Ok(value) = serde_json::to_value(list) else {
+        vault_warn(app, "history save failed");
+        return;
+    };
+    store.set("ipHistory", value);
+    if store.save().is_err() {
+        vault_warn(app, "history save failed");
+    }
+}
+
+fn record_history(app: &AppHandle, ip: &str) -> bool {
+    if ip.is_empty() || ip == "unreachable" {
+        return false;
+    }
+    let list = read_history(app);
+    if list
+        .first()
+        .and_then(|e| vault::open_ip(&e.enc))
+        .is_some_and(|first| first == ip)
+    {
+        return false;
+    }
+    match vault::next_history(&list, ip, 0) {
+        Some(next) => {
+            write_history(app, &next);
+            true
+        }
+        None => {
+            vault_warn(app, "log save failed");
+            false
+        }
+    }
+}
+
+fn migrate_history_once(app: &AppHandle) {
+    let data = vault::load(&log_path(app));
+    if data.history.is_empty() {
+        return;
+    }
+    if read_history(app).is_empty() {
+        write_history(app, &data.history);
+    }
+    let mut data = data;
+    data.history.clear();
+    vault_save(app, &data);
+}
+
+fn notifications_allowed(app: &AppHandle) -> bool {
+    use tauri_plugin_store::StoreExt;
+    let (path, _) = settings_path(app);
+    app.store(path)
+        .ok()
+        .and_then(|store| store.get("notifications"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
+}
+
+fn toast(app: &AppHandle, body: &str) {
+    if !notifications_allowed(app) {
+        return;
+    }
+    use tauri_plugin_notification::NotificationExt;
+    let _ = app
+        .notification()
+        .builder()
+        .title("Warper")
+        .body(body)
+        .show();
+}
+
+async fn refresh_ip(app: &AppHandle) -> String {
     let ip = warp::fetch_exit_ip().await;
+    if record_history(app, &ip) {
+        vault_push(app, "Exit IP changed");
+        toast(app, "Exit IP changed");
+    }
+    ip
+}
+
+async fn emit_ip(app: &AppHandle) {
+    let ip = refresh_ip(app).await;
     let _ = app.emit("warp-ip", ip);
 }
 
+fn spawn_ip_watch(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            emit_ip(&app).await;
+        }
+    });
+}
+
 async fn locked(state: State<'_, WarpLock>) -> Result<tokio::sync::OwnedMutexGuard<()>, String> {
-    // No elevation gate: the app runs asInvoker and `warp-cli` talks to the
-    // warp-svc system service. This only serializes overlapping operations.
     state
         .0
         .clone()
@@ -82,7 +218,6 @@ async fn locked(state: State<'_, WarpLock>) -> Result<tokio::sync::OwnedMutexGua
         .map_err(|_| "another operation is already running".to_string())
 }
 
-/// `registration new` refuses while a stale registration exists, so clear it and retry once.
 async fn fresh_registration(app: &AppHandle) -> Result<(), String> {
     match warp::run_warp(&["registration", "new"]).await {
         Ok(_) => Ok(()),
@@ -151,11 +286,10 @@ async fn get_warp_info() -> WarpInfo {
 
 #[tauri::command]
 async fn get_settings_path(app: AppHandle) -> SettingsLocation {
-    let (path, portable, imported) = settings_path(&app);
+    let (path, portable) = settings_path(&app);
     SettingsLocation {
         path: path.to_string_lossy().into_owned(),
         portable,
-        imported,
     }
 }
 
@@ -191,6 +325,7 @@ async fn warp_connect(
     connect_with_mode(&app, connect_mode.trim()).await?;
     emit(&app, "connected");
     emit_ip(&app).await;
+    note_op(&app);
     Ok("WARP connected".to_string())
 }
 
@@ -207,12 +342,14 @@ async fn warp_standby(
         warp::run_warp(&["disconnect"]).await?;
         emit(&app, "disconnected");
         emit_ip(&app).await;
+        note_op(&app);
         Ok("WARP disconnected".to_string())
     } else {
         emit(&app, &format!("switching to {standby} mode…"));
         warp::set_mode(standby).await?;
         emit(&app, &format!("standby mode ({standby})"));
         emit_ip(&app).await;
+        note_op(&app);
         Ok(format!("WARP on standby ({standby})"))
     }
 }
@@ -228,6 +365,7 @@ async fn quick_reset(
     if result.is_ok() {
         emit_ip(&app).await;
     }
+    note_op(&app);
     result
 }
 
@@ -242,14 +380,136 @@ async fn full_reset(
     if result.is_ok() {
         emit_ip(&app).await;
     }
+    note_op(&app);
     result
 }
 
-fn show_main(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.set_focus();
+#[tauri::command]
+async fn auto_countdown(app: AppHandle) -> i64 {
+    use tauri_plugin_store::StoreExt;
+    let (path, _) = settings_path(&app);
+    let Ok(store) = app.store(path) else {
+        return -1;
+    };
+    let enabled = store
+        .get("autoReset")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !enabled {
+        return -1;
     }
+    let mins = store
+        .get("intervalMinutes")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(15);
+    let elapsed = app
+        .state::<AutoState>()
+        .0
+        .lock()
+        .map(|last| last.elapsed().as_secs())
+        .unwrap_or(0);
+    (mins.saturating_mul(60).saturating_sub(elapsed)) as i64
+}
+
+#[tauri::command]
+async fn reset_auto_timer(app: AppHandle) {
+    note_op(&app);
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryEntry {
+    ip: String,
+    at: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LogState {
+    history: Vec<HistoryEntry>,
+    lines: Vec<String>,
+}
+
+#[tauri::command]
+async fn get_log_state(app: AppHandle) -> LogState {
+    let history = read_history(&app)
+        .iter()
+        .filter_map(|e| vault::open_ip(&e.enc).map(|ip| HistoryEntry { ip, at: e.at }))
+        .collect();
+    LogState {
+        history,
+        lines: vault::open_lines(&vault::load(&log_path(&app))),
+    }
+}
+
+#[tauri::command]
+async fn append_log(app: AppHandle, message: String) {
+    vault_push(&app, &message);
+}
+
+#[tauri::command]
+async fn clear_log(app: AppHandle) {
+    vault_clear(&app);
+}
+
+#[tauri::command]
+async fn get_exit_ip(app: AppHandle) -> String {
+    refresh_ip(&app).await
+}
+
+fn show_main(app: &AppHandle) {
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let build = handle.state::<WindowBuildLock>();
+        let _guard = build.0.lock();
+        let mut mains: Vec<_> = handle
+            .webview_windows()
+            .into_values()
+            .filter(|w| w.label() == "main")
+            .collect();
+        if mains.len() > 1 {
+            mains.sort_by_key(|w| std::cmp::Reverse(w.is_visible().unwrap_or(false)));
+            for extra in mains.drain(1..) {
+                let _ = extra.destroy();
+            }
+        }
+        if let Some(window) = mains.into_iter().next() {
+            let _ = window.show();
+            let _ = window.set_focus();
+            return;
+        }
+        let built = handle.config().app.windows.first().cloned().map(|config| {
+            tauri::WebviewWindowBuilder::from_config(&handle, &config)
+                .and_then(|builder| builder.build())
+        });
+        match built {
+            Some(Ok(window)) => {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+            _ => {
+                if let Some(window) = handle.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                } else {
+                    notify_no_window(&handle);
+                }
+            }
+        }
+    });
+}
+
+fn notify_no_window(app: &AppHandle) {
+    if !notifications_allowed(app) {
+        return;
+    }
+    use tauri_plugin_notification::NotificationExt;
+    let _ = app
+        .notification()
+        .builder()
+        .title("Warper")
+        .body("Window could not open — Warper is running in the tray.")
+        .show();
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
@@ -284,7 +544,6 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                         emit(&handle, "quick reset ignored — already running");
                         return;
                     };
-                    // No frontend settings here; reuse the live mode.
                     let mode = warp::get_mode()
                         .await
                         .unwrap_or_else(|_| "warp".to_string());
@@ -295,6 +554,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                         }
                         Err(e) => emit(&handle, &format!("quick reset failed: {e}")),
                     }
+                    note_op(&handle);
                 });
             }
             "quit" => app.exit(0),
@@ -315,7 +575,6 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // `--minimized` is honored only when the stored `startMinimized` setting agrees.
     let autostart = tauri_plugin_autostart::Builder::new()
         .app_name("Warper")
         .args(["--minimized"])
@@ -331,14 +590,18 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .manage(WarpLock(Arc::new(tokio::sync::Mutex::new(()))))
+        .manage(AutoState(Mutex::new(Instant::now())))
+        .manage(WindowBuildLock(Mutex::new(())))
+        .manage(VaultWarned(Mutex::new(false)))
         .setup(move |app| {
-            // Register the toast identity before anything can notify.
             aumid::ensure_aumid(app.handle());
             let _ = build_tray(app.handle());
+            migrate_history_once(app.handle());
             spawn_status_watcher(app.handle().clone());
+            spawn_auto_reset(app.handle().clone());
+            spawn_ip_watch(app.handle().clone());
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                // Window starts hidden to avoid a flash when tray-starting.
                 let start_min = start_minimized(&handle).await;
                 let minimized = from_autostart && start_min;
                 if let Some(note) = repair_autostart_if_stale(&handle) {
@@ -358,7 +621,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                let _ = window.hide();
+                let _ = window.destroy();
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -372,13 +635,26 @@ pub fn run() {
             warp_connect,
             warp_standby,
             quick_reset,
-            full_reset
+            full_reset,
+            auto_countdown,
+            reset_auto_timer,
+            get_log_state,
+            append_log,
+            clear_log,
+            get_exit_ip
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                if code.is_none() {
+                    api.prevent_exit();
+                }
+            }
+            let _ = app;
+        });
 }
 
-/// Read the `HKCU\...\Run\Warper` command written by the autostart plugin.
 #[cfg(windows)]
 fn run_command() -> Option<String> {
     use windows::core::HSTRING;
@@ -444,8 +720,6 @@ fn run_command() -> Option<String> {
     )
 }
 
-/// Re-register autostart when the stored Run command no longer points at this
-/// exe (portable moves leave a stale absolute path). Returns a log line on repair.
 fn repair_autostart_if_stale(app: &AppHandle) -> Option<String> {
     if !app.autolaunch().is_enabled().unwrap_or(false) {
         return None;
@@ -462,10 +736,9 @@ fn repair_autostart_if_stale(app: &AppHandle) -> Option<String> {
     Some(format!("autostart entry repaired (was: {stored})"))
 }
 
-/// Falls back to minimized when the store is unreadable during autostart.
 async fn start_minimized(app: &AppHandle) -> bool {
     use tauri_plugin_store::StoreExt;
-    let (path, _, _) = settings_path(app);
+    let (path, _) = settings_path(app);
     let Ok(store) = app.store(path) else {
         return true;
     };
@@ -475,7 +748,70 @@ async fn start_minimized(app: &AppHandle) -> bool {
         .unwrap_or(true)
 }
 
-/// Push `warp-status` events on change; slow-poll while WARP is missing.
+fn spawn_auto_reset(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(15)).await;
+            if !auto_due(&app).await {
+                continue;
+            }
+            let guard = app
+                .state::<WarpLock>()
+                .0
+                .clone()
+                .try_lock_owned()
+                .map_err(|_| "another operation is already running".to_string());
+            let Ok(_guard) = guard else {
+                continue;
+            };
+            let stored: Option<String> = {
+                use tauri_plugin_store::StoreExt;
+                let (path, _) = settings_path(&app);
+                app.store(path)
+                    .ok()
+                    .and_then(|store| store.get("connectMode"))
+                    .and_then(|v| v.as_str().map(str::to_string))
+            };
+            let mode = match stored {
+                Some(mode) => mode,
+                None => warp::get_mode()
+                    .await
+                    .unwrap_or_else(|_| "warp".to_string()),
+            };
+            if run_quick_reset(&app, &mode).await.is_ok() {
+                emit_ip(&app).await;
+            }
+            note_op(&app);
+        }
+    });
+}
+
+async fn auto_due(app: &AppHandle) -> bool {
+    use tauri_plugin_store::StoreExt;
+    let (path, _) = settings_path(app);
+    let Ok(store) = app.store(path) else {
+        return false;
+    };
+    let enabled = store
+        .get("autoReset")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !enabled {
+        return false;
+    }
+    let mins = store
+        .get("intervalMinutes")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(15);
+    let elapsed = app
+        .state::<AutoState>()
+        .0
+        .lock()
+        .map(|last| last.elapsed())
+        .unwrap_or(Duration::ZERO);
+    elapsed >= Duration::from_secs(mins.saturating_mul(60))
+}
+
 fn spawn_status_watcher(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         let mut failed = false;
@@ -514,8 +850,7 @@ async fn run_watch(app: &AppHandle) -> Result<(), String> {
         .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("failed to launch warp-cli listener: {e}"))?;
-    // Kill the child with Warper even on taskkill/crash, so no
-    // orphan holds handles on the portable folder.
+
     if let Err(error) = bind_child_lifetime(&child) {
         emit(app, &format!("warning: listener not job-bound ({error})"));
     }
@@ -546,7 +881,6 @@ async fn run_watch(app: &AppHandle) -> Result<(), String> {
     Err("warp-cli listener exited".to_string())
 }
 
-/// Job Object with KILL_ON_JOB_CLOSE, leaked so the kill fires at process teardown.
 fn bind_child_lifetime(child: &tokio::process::Child) -> Result<(), String> {
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::System::JobObjects::{
@@ -556,7 +890,6 @@ fn bind_child_lifetime(child: &tokio::process::Child) -> Result<(), String> {
     };
 
     unsafe {
-        // Leaked on purpose: closing the job would lift KILL_ON_JOB_CLOSE.
         let job =
             std::mem::ManuallyDrop::new(CreateJobObjectW(None, None).map_err(|e| e.to_string())?);
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();

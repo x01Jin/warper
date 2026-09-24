@@ -101,6 +101,10 @@ body {
   background: #e5484d;
 }
 
+.dot.warn {
+  background: #e0912f;
+}
+
 .readouts {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -367,11 +371,15 @@ button:focus-visible {
 @keyframes pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(61, 220, 132, 0.5);
+    opacity: 1;
   }
   50% {
-    box-shadow: 0 0 0 6px rgba(61, 220, 132, 0);
+    opacity: 0.55;
   }
+}
+
+body.suspended .dot.pulse.on {
+  animation: none;
 }
 
 .hidden {

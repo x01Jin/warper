@@ -13,10 +13,12 @@
     "withGlobalTauri": true,
     "windows": [
       {
+        "label": "main",
         "title": "Warper",
         "width": 880,
         "height": 620,
-        "visible": false
+        "visible": false,
+        "create": false
       }
     ],
     "security": {

@@ -1,10 +1,3 @@
-//! Windows toast identity for unpacked (portable) builds.
-//!
-//! WinRT toasts only render for an AppUserModelID the OS knows. Installers
-//! register it via their Start-Menu shortcut; a portable exe has none, so
-//! toasts are silently dropped. This registers the live Tauri identifier at
-//! startup. Best-effort and silent: failure keeps the old behavior.
-
 #[cfg(windows)]
 pub fn ensure_aumid(app: &tauri::AppHandle) {
     let _ = run(&app.config().identifier);
@@ -21,7 +14,6 @@ fn run(aumid: &str) -> Option<()> {
     Some(())
 }
 
-/// Pin the process to the AUMID.
 #[cfg(windows)]
 fn advertise(aumid: &str) -> Option<()> {
     use windows::core::HSTRING;
@@ -29,7 +21,6 @@ fn advertise(aumid: &str) -> Option<()> {
     unsafe { SetCurrentProcessExplicitAppUserModelID(&HSTRING::from(aumid)) }.ok()
 }
 
-/// Register `HKCU\...\AppUserModelId\<aumid>` (per-user, no admin).
 #[cfg(windows)]
 fn register_key(aumid: &str) -> Option<()> {
     use windows::core::HSTRING;
@@ -92,7 +83,6 @@ fn register_key(aumid: &str) -> Option<()> {
     ok.then_some(())
 }
 
-/// Install/refresh the Start-Menu shortcut carrying the AUMID.
 #[cfg(windows)]
 fn install_shortcut(aumid: &str) -> Option<()> {
     use std::os::windows::ffi::OsStrExt;
@@ -106,8 +96,6 @@ fn install_shortcut(aumid: &str) -> Option<()> {
     use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
     use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
 
-    /// `PKEY_AppUserModel_ID` ({9F4C2855-…-E1D42DE1D5F3}, pid 5), defined
-    /// locally to avoid an unrelated storage feature.
     const PKEY_APP_USER_MODEL_ID: PROPERTYKEY = PROPERTYKEY {
         fmtid: windows::core::GUID::from_u128(0x9f4c2855_9f79_4b39_a8d0_e1d42de1d5f3),
         pid: 5,
