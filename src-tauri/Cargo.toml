@@ -1,9 +1,9 @@
 [package]
 name = "warper"
 version = "0.1.1"
-description = "A Tauri App"
+description = "Tray app that cycles Cloudflare WARP exit IPs through warp-cli"
 authors = ["x01Jin"]
-license = "CC-BY-NC-SA-4.0"
+license = "GPL-3.0-only"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

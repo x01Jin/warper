@@ -91,10 +91,10 @@ const el = {
     ),
   ],
   autoToggle: document.querySelector("#auto-toggle") as HTMLInputElement,
+  standbyBtn: document.querySelector("#btn-standby") as HTMLButtonElement,
   segment: [...document.querySelectorAll<HTMLButtonElement>(".segment button[data-minutes]")],
   countdown: document.querySelector("#auto-countdown") as HTMLElement,
   banner: document.querySelector("#warp-banner") as HTMLElement,
-  bannerDetail: document.querySelector("#banner-detail") as HTMLElement,
   autostartToggle: document.querySelector("#autostart-toggle") as HTMLInputElement,
   notifToggle: document.querySelector("#notif-toggle") as HTMLInputElement,
   startSegment: [...document.querySelectorAll<HTMLButtonElement>(".segment button[data-start]")],
@@ -115,6 +115,7 @@ let deviceFetching = false;
 let lastDeviceError: string | null = null;
 let lastCountdownText: string | null = null;
 let fireAtMs: number | null = null;
+let warpPathLogged = false;
 
 const logBuffer: string[] = [];
 let lastLogMessage: string | null = null;
@@ -176,12 +177,20 @@ function paintStatus(status: WarpStatus): void {
 
 function paintMissing(): void {
   el.dot.className = "dot off";
-  el.statusText.textContent = "WARP missing";
+  el.statusText.textContent = "warp-cli missing";
   el.device.textContent = "—";
   el.warpVersion.textContent = "missing";
-  el.bannerDetail.textContent = "Install Cloudflare WARP to use Warper.";
   el.banner.classList.remove("hidden");
   updateButtons();
+}
+
+function clearMissing(): void {
+  if (!warpMissing) return;
+  warpMissing = false;
+  el.banner.classList.add("hidden");
+  logLine("warp-cli reachable — controls re-enabled");
+  updateButtons();
+  void checkWarp();
 }
 
 async function persist(): Promise<void> {
@@ -276,19 +285,31 @@ function buildModeOptions(): void {
   el.standbyMode.appendChild(off);
 }
 
+function formatStamp(at: number): string {
+  const date = new Date(at);
+  if (date.toDateString() === new Date().toDateString()) {
+    return date.toLocaleTimeString();
+  }
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function paintIpHistory(entries: IpEntry[]): void {
   el.ipHistory.innerHTML = "";
   for (const entry of entries) {
     const li = document.createElement("li");
-    li.textContent = `${entry.ip} — ${new Date(entry.at).toLocaleTimeString()}`;
+    li.textContent = `${entry.ip} — ${formatStamp(entry.at)}`;
     el.ipHistory.appendChild(li);
   }
 }
 
 async function paintIpHistoryFromVault(): Promise<void> {
   try {
-    const state = await invoke<LogState>("get_log_state");
-    paintIpHistory(state.history);
+    paintIpHistory(await invoke<IpEntry[]>("get_ip_history"));
   } catch (error) {
     logLine(`history load failed: ${error}`);
   }
@@ -316,6 +337,10 @@ async function checkWarp(): Promise<boolean> {
     if (!info.installed) {
       paintMissing();
     } else {
+      if (!warpPathLogged) {
+        warpPathLogged = true;
+        logLine(`warp-cli: ${info.path ?? "found on PATH"}`);
+      }
       updateButtons();
     }
     return info.installed;
@@ -410,6 +435,7 @@ async function refreshStatus(): Promise<boolean> {
 async function settleStatus(): Promise<void> {
   for (let attempt = 0; attempt < SETTLE_RETRIES; attempt++) {
     if (await refreshStatus()) return;
+    if (document.hidden) return;
     await new Promise((resolve) => setTimeout(resolve, SETTLE_PAUSE_MS));
   }
   await refreshStatus();
@@ -440,17 +466,28 @@ async function runOp(
   }
 }
 
+function paintStandbyButton(): void {
+  const mode = settings.standbyMode;
+  el.standbyBtn.textContent = mode === "off" ? "Disconnect" : "Standby";
+  el.standbyBtn.title =
+    mode === "off" ? "Disconnect WARP" : `Switch to ${MODE_LABELS[mode] ?? mode}`;
+}
+
 function paintSegment(): void {
   const current = String(settings.intervalMinutes);
   for (const button of el.segment) {
-    button.classList.toggle("active", button.dataset.minutes === current);
+    const active = button.dataset.minutes === current;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
   }
 }
 
 function paintStartSegment(): void {
   const current = settings.startMinimized ? "tray" : "window";
   for (const button of el.startSegment) {
-    button.classList.toggle("active", button.dataset.start === current);
+    const active = button.dataset.start === current;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
   }
 }
 
@@ -473,7 +510,9 @@ async function resyncCountdown(): Promise<void> {
     const secs = await invoke<number>("auto_countdown");
     fireAtMs = secs < 0 ? null : Date.now() + secs * 1000;
     paintCountdown(secs);
-  } catch {}
+  } catch (error) {
+    logLine(`countdown sync failed: ${error}`);
+  }
 }
 
 function tickCountdown(): void {
@@ -483,12 +522,17 @@ function tickCountdown(): void {
 
 window.addEventListener("DOMContentLoaded", () => {
   void (async () => {
-    await loadSettings();
+    try {
+      await loadSettings();
+    } catch (error) {
+      logLine(`settings load failed: ${error}`);
+    }
     buildModeOptions();
     el.autoToggle.checked = settings.autoReset;
     el.notifToggle.checked = settings.notifications;
     el.connectMode.value = settings.connectMode;
     el.standbyMode.value = settings.standbyMode;
+    paintStandbyButton();
     paintSegment();
     paintStartSegment();
     try {
@@ -531,6 +575,18 @@ window.addEventListener("DOMContentLoaded", () => {
       el.log.textContent = "";
       void invoke("clear_log").catch(() => undefined);
     });
+    document.querySelector("#btn-recheck")?.addEventListener("click", () => {
+      void (async () => {
+        try {
+          if (await checkWarp()) {
+            await refresh();
+            await resyncCountdown();
+          }
+        } catch (error) {
+          logLine(`recheck failed: ${error}`);
+        }
+      })();
+    });
     document.querySelector("#btn-download-page")?.addEventListener("click", () => {
       openUrl(WARP_DOWNLOAD_PAGE).catch((error: unknown) => {
         logLine(`cannot open download page: ${error}`);
@@ -539,10 +595,13 @@ window.addEventListener("DOMContentLoaded", () => {
 
     el.autoToggle.addEventListener("change", () => {
       settings.autoReset = el.autoToggle.checked;
-      el.countdown.textContent = "";
-      lastCountdownText = "";
       logLine(`auto reset ${settings.autoReset ? "enabled" : "disabled"}`);
-      void persist().then(() => invoke("reset_auto_timer"));
+      void (async () => {
+        await persist();
+        await invoke("reset_auto_timer");
+        lastCountdownText = null;
+        await resyncCountdown();
+      })();
     });
     for (const button of el.segment) {
       button.addEventListener("click", () => {
@@ -550,7 +609,12 @@ window.addEventListener("DOMContentLoaded", () => {
         if (VALID_INTERVALS.includes(mins)) {
           settings.intervalMinutes = mins;
           paintSegment();
-          void persist().then(() => invoke("reset_auto_timer"));
+          void (async () => {
+            await persist();
+            await invoke("reset_auto_timer");
+            lastCountdownText = null;
+            await resyncCountdown();
+          })();
         }
       });
     }
@@ -601,20 +665,20 @@ window.addEventListener("DOMContentLoaded", () => {
     });
     el.standbyMode.addEventListener("change", () => {
       settings.standbyMode = el.standbyMode.value;
+      paintStandbyButton();
       logLine(`standby mode: ${settings.standbyMode}`);
       void persist();
     });
     await listen<Progress>("warp-progress", (event) => {
       logLine(event.payload.step, false);
+      if (event.payload.step.includes("reset complete")) void resyncCountdown();
     });
     await listen<WarpStatus>("warp-status", (event) => {
-      if (!busy) {
-        paintStatus(event.payload);
-        logHealth(event.payload.reason);
-        if (event.payload.connected) {
-          void refreshDeviceIfBlank();
-        }
-      }
+      if (busy) return;
+      clearMissing();
+      paintStatus(event.payload);
+      logHealth(event.payload.reason);
+      if (event.payload.connected) void refreshDeviceIfBlank();
     });
     await listen<string>("warp-ip", (event) => {
       el.exitIp.textContent = event.payload;

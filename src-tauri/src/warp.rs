@@ -48,6 +48,7 @@ pub async fn run_warp(args: &[&str]) -> Result<String, String> {
         WARP_TIMEOUT,
         Command::new(warp_cli_path())
             .creation_flags(CREATE_NO_WINDOW)
+            .kill_on_drop(true)
             .args(args)
             .output(),
     )

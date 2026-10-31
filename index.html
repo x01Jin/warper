@@ -46,13 +46,15 @@
 
       <section id="warp-banner" class="banner hidden" aria-live="polite">
         <div class="banner-text">
-          <strong>WARP not found.</strong>
+          <strong>warp-cli not found.</strong>
           <span id="banner-detail"
-            >Warper needs Cloudflare WARP installed. Get it from the download page, then
-            Recheck.</span
+            >Warper drives warp-cli, which ships with the Cloudflare WARP package. Install that
+            package, or put warp-cli on PATH, then Recheck. The WARP window does not need to
+            run.</span
           >
         </div>
         <div class="banner-actions">
+          <button id="btn-recheck" class="ghost">Recheck</button>
           <button id="btn-download-page" class="ghost">Download page</button>
         </div>
       </section>

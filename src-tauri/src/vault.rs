@@ -27,16 +27,64 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+#[cfg(windows)]
+fn local_offset_secs() -> i64 {
+    use windows::core::HSTRING;
+    use windows::Win32::Foundation::ERROR_SUCCESS;
+    use windows::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ,
+    };
+
+    let mut key = HKEY::default();
+    if unsafe {
+        RegOpenKeyExW(
+            HKEY_LOCAL_MACHINE,
+            &HSTRING::from(r"SYSTEMCurrentControlSetControlTimeZoneInformation"),
+            None,
+            KEY_READ,
+            &mut key,
+        )
+    } != ERROR_SUCCESS
+    {
+        return 0;
+    }
+    let mut bias = 0u32;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    let read = unsafe {
+        RegQueryValueExW(
+            key,
+            &HSTRING::from("ActiveTimeBias"),
+            None,
+            None,
+            Some(&mut bias as *mut u32 as *mut u8),
+            Some(&mut size),
+        )
+    };
+    unsafe {
+        let _ = RegCloseKey(key);
+    }
+    if read != ERROR_SUCCESS || size != 4 {
+        return 0;
+    }
+    (bias as i32 as i64) * -60
+}
+
+#[cfg(not(windows))]
+fn local_offset_secs() -> i64 {
+    0
+}
+
 pub fn local_stamp() -> String {
-    let secs = std::time::SystemTime::now()
+    let utc = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
+        .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
+    let secs = utc + local_offset_secs();
     format!(
         "{:02}:{:02}:{:02}",
-        (secs / 3600) % 24,
-        (secs / 60) % 60,
-        secs % 60
+        secs.rem_euclid(86_400) / 3_600,
+        secs.rem_euclid(3_600) / 60,
+        secs.rem_euclid(60)
     )
 }
 
@@ -309,7 +357,12 @@ pub fn load(path: &Path) -> VaultData {
 
 pub fn save(path: &Path, data: &VaultData) -> Result<(), String> {
     let bytes = serde_json::to_vec(data).map_err(|e| format!("vault encode failed: {e}"))?;
-    std::fs::write(path, bytes).map_err(|e| format!("vault write failed: {e}"))
+    let tmp = path.with_extension("log.tmp");
+    std::fs::write(&tmp, bytes).map_err(|e| format!("vault write failed: {e}"))?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("vault replace failed: {e}")
+    })
 }
 
 #[cfg(test)]

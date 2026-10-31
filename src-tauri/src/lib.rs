@@ -18,6 +18,8 @@ pub(crate) struct WindowBuildLock(pub(crate) Mutex<()>);
 
 pub(crate) struct VaultWarned(pub(crate) Mutex<bool>);
 
+pub(crate) struct VaultLock(pub(crate) Mutex<()>);
+
 fn note_op(app: &AppHandle) {
     if let Ok(mut last) = app.state::<AutoState>().0.lock() {
         *last = Instant::now();
@@ -89,15 +91,31 @@ fn vault_save(app: &AppHandle, data: &vault::VaultData) {
 }
 
 fn vault_push(app: &AppHandle, message: &str) {
-    let mut data = vault::load(&log_path(app));
-    vault::push_line_data(&mut data, message);
-    vault_save(app, &data);
+    let path = log_path(app);
+    let failed = {
+        let lock = app.state::<VaultLock>();
+        let _guard = lock.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut data = vault::load(&path);
+        vault::push_line_data(&mut data, message);
+        vault::save(&path, &data).is_err()
+    };
+    if failed {
+        vault_warn(app, "log save failed");
+    }
 }
 
 fn vault_clear(app: &AppHandle) {
-    let mut data = vault::load(&log_path(app));
-    data.lines.clear();
-    vault_save(app, &data);
+    let path = log_path(app);
+    let failed = {
+        let lock = app.state::<VaultLock>();
+        let _guard = lock.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut data = vault::load(&path);
+        data.lines.clear();
+        vault::save(&path, &data).is_err()
+    };
+    if failed {
+        vault_warn(app, "log clear failed");
+    }
 }
 
 fn read_history(app: &AppHandle) -> Vec<vault::SealedEntry> {
@@ -430,16 +448,24 @@ struct LogState {
     lines: Vec<String>,
 }
 
-#[tauri::command]
-async fn get_log_state(app: AppHandle) -> LogState {
-    let history = read_history(&app)
+fn history_entries(app: &AppHandle) -> Vec<HistoryEntry> {
+    read_history(app)
         .iter()
         .filter_map(|e| vault::open_ip(&e.enc).map(|ip| HistoryEntry { ip, at: e.at }))
-        .collect();
+        .collect()
+}
+
+#[tauri::command]
+async fn get_log_state(app: AppHandle) -> LogState {
     LogState {
-        history,
+        history: history_entries(&app),
         lines: vault::open_lines(&vault::load(&log_path(&app))),
     }
+}
+
+#[tauri::command]
+async fn get_ip_history(app: AppHandle) -> Vec<HistoryEntry> {
+    history_entries(&app)
 }
 
 #[tauri::command]
@@ -593,6 +619,7 @@ pub fn run() {
         .manage(AutoState(Mutex::new(Instant::now())))
         .manage(WindowBuildLock(Mutex::new(())))
         .manage(VaultWarned(Mutex::new(false)))
+        .manage(VaultLock(Mutex::new(())))
         .setup(move |app| {
             aumid::ensure_aumid(app.handle());
             let _ = build_tray(app.handle());
@@ -639,6 +666,7 @@ pub fn run() {
             auto_countdown,
             reset_auto_timer,
             get_log_state,
+            get_ip_history,
             append_log,
             clear_log,
             get_exit_ip

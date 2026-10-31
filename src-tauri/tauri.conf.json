@@ -17,6 +17,8 @@
         "title": "Warper",
         "width": 880,
         "height": 620,
+        "minWidth": 520,
+        "minHeight": 420,
         "visible": false,
         "create": false
       }
