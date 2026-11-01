@@ -39,7 +39,7 @@ fn local_offset_secs() -> i64 {
     if unsafe {
         RegOpenKeyExW(
             HKEY_LOCAL_MACHINE,
-            &HSTRING::from(r"SYSTEMCurrentControlSetControlTimeZoneInformation"),
+            &HSTRING::from(r"SYSTEM\CurrentControlSet\Control\TimeZoneInformation"),
             None,
             KEY_READ,
             &mut key,

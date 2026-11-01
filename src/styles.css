@@ -332,11 +332,17 @@ button:focus-visible {
 }
 
 .term-clear {
-  margin-left: auto;
+  margin-left: 8px;
   padding: 0.2em 0.7em;
   font-size: 0.78rem;
   font-weight: 500;
   color: #8b91a3;
+}
+
+.term-version {
+  margin-left: auto;
+  color: #5b6172;
+  font-weight: 500;
 }
 
 .term-clear:hover {
@@ -418,6 +424,15 @@ body.suspended .dot.pulse.on {
 .banner-actions button {
   padding: 0.45em 0.9em;
   font-size: 0.85rem;
+}
+
+.banner.update {
+  background: #10262b;
+  border-color: rgba(53, 208, 224, 0.55);
+}
+
+.banner.update .banner-text {
+  color: #7fe3ef;
 }
 
 .settings {

@@ -19,6 +19,8 @@ A simple GUI tool for cycling Cloudflare WARP exit IPs on Windows.
 - Connect and standby modes for connection and disconnection.
 - Start with Windows, open in the tray or in a window, desktop notifications for each result.
 - Missing-warp-cli banner with a Recheck button and a download link.
+- Checks the latest GitHub release at launch and offers the release page when a newer version exists.
+- Repairs its own logon autostart entry, including the case where Windows is told to run Warper as administrator.
 - `cleanup-warper.bat` removes Warper's files, registry entries, and startup traces. Cloudflare WARP itself is left untouched.
 
 ## Use cases

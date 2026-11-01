@@ -35,6 +35,13 @@ interface SettingsLocation {
   portable: boolean;
 }
 
+interface UpdateInfo {
+  current: string;
+  latest: string;
+  url: string;
+  available: boolean;
+}
+
 interface LogState {
   history: IpEntry[];
   lines: string[];
@@ -67,6 +74,7 @@ const MODE_LABELS: Record<string, string> = {
   tunnel_only: "Traffic only",
 };
 const WARP_DOWNLOAD_PAGE = "https://developers.cloudflare.com/warp-client/get-started/windows/";
+const RELEASES_PAGE = "https://github.com/x01Jin/warper/releases";
 
 const DEFAULTS: Settings = {
   autoReset: false,
@@ -102,6 +110,13 @@ const el = {
   modeValue: document.querySelector("#mode-value") as HTMLElement,
   connectMode: document.querySelector("#connect-mode") as HTMLSelectElement,
   standbyMode: document.querySelector("#standby-mode") as HTMLSelectElement,
+  updateBanner: document.querySelector("#update-banner") as HTMLElement,
+  updateTitle: document.querySelector("#update-title") as HTMLElement,
+  updateDetail: document.querySelector("#update-detail") as HTMLElement,
+  updatePage: document.querySelector("#btn-update-page") as HTMLButtonElement,
+  updateDismiss: document.querySelector("#btn-update-dismiss") as HTMLButtonElement,
+  checkUpdate: document.querySelector("#btn-check-update") as HTMLButtonElement,
+  appVersion: document.querySelector("#app-version") as HTMLElement,
 };
 
 let busy = false;
@@ -116,6 +131,7 @@ let lastDeviceError: string | null = null;
 let lastCountdownText: string | null = null;
 let fireAtMs: number | null = null;
 let warpPathLogged = false;
+let updateInfo: UpdateInfo | null = null;
 
 const logBuffer: string[] = [];
 let lastLogMessage: string | null = null;
@@ -197,7 +213,6 @@ async function persist(): Promise<void> {
   if (!store) return;
   try {
     await ensureStore();
-    if (!store) return;
     await store.set("autoReset", settings.autoReset);
     await store.set("intervalMinutes", settings.intervalMinutes);
     await store.set("startMinimized", settings.startMinimized);
@@ -347,6 +362,31 @@ async function checkWarp(): Promise<boolean> {
   } catch (error) {
     logLine(`warp check failed: ${error}`);
     return !warpMissing;
+  }
+}
+
+function paintUpdate(info: UpdateInfo | null): void {
+  if (!info || !info.available) {
+    el.updateBanner.classList.add("hidden");
+    return;
+  }
+  updateInfo = info;
+  el.updateTitle.textContent = `Warper v${info.latest} is available`;
+  el.updateDetail.textContent = `You are running v${info.current}.`;
+  el.updateBanner.classList.remove("hidden");
+}
+
+async function checkUpdate(): Promise<void> {
+  try {
+    const info = await invoke<UpdateInfo>("check_update");
+    paintUpdate(info);
+    if (info.available) {
+      logLine(`update available: v${info.latest} (running v${info.current})`);
+    } else {
+      logLine(`Warper is up to date (v${info.current})`);
+    }
+  } catch (error) {
+    logLine(`update check failed: ${error}`);
   }
 }
 
@@ -540,6 +580,11 @@ window.addEventListener("DOMContentLoaded", () => {
     } catch (error) {
       logLine(`autostart check failed: ${error}`);
     }
+    try {
+      el.appVersion.textContent = `v${await invoke<string>("get_app_version")}`;
+    } catch (error) {
+      logLine(`version lookup failed: ${error}`);
+    }
     document.querySelector("#btn-connect")?.addEventListener(
       "click",
       () =>
@@ -591,6 +636,15 @@ window.addEventListener("DOMContentLoaded", () => {
       openUrl(WARP_DOWNLOAD_PAGE).catch((error: unknown) => {
         logLine(`cannot open download page: ${error}`);
       });
+    });
+    el.checkUpdate.addEventListener("click", () => void checkUpdate());
+    el.updatePage.addEventListener("click", () => {
+      openUrl(updateInfo?.url ?? RELEASES_PAGE).catch((error: unknown) => {
+        logLine(`cannot open release page: ${error}`);
+      });
+    });
+    el.updateDismiss.addEventListener("click", () => {
+      el.updateBanner.classList.add("hidden");
     });
 
     el.autoToggle.addEventListener("change", () => {
@@ -654,7 +708,9 @@ window.addEventListener("DOMContentLoaded", () => {
                 logLine("notifications blocked by the OS — allow Warper in Windows Settings");
               }
             }
-          } catch {}
+          } catch (error) {
+            logLine(`notification permission check failed: ${error}`);
+          }
         })();
       }
     });
@@ -689,6 +745,14 @@ window.addEventListener("DOMContentLoaded", () => {
       logLine("warp-cli not found — install WARP to continue");
       paintMissing();
     });
+    await listen<UpdateInfo>("update-available", (event) => {
+      paintUpdate(event.payload);
+    });
+    try {
+      paintUpdate(await invoke<UpdateInfo | null>("get_update_state"));
+    } catch (error) {
+      logLine(`update state failed: ${error}`);
+    }
 
     await loadLogState();
     await refresh();

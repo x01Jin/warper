@@ -1,9 +1,11 @@
 mod aumid;
+mod startup;
+mod update;
 mod vault;
 mod warp;
 
 use std::process::Stdio;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -19,6 +21,8 @@ pub(crate) struct WindowBuildLock(pub(crate) Mutex<()>);
 pub(crate) struct VaultWarned(pub(crate) Mutex<bool>);
 
 pub(crate) struct VaultLock(pub(crate) Mutex<()>);
+
+pub(crate) struct UpdateState(pub(crate) Mutex<Option<update::UpdateInfo>>);
 
 fn note_op(app: &AppHandle) {
     if let Ok(mut last) = app.state::<AutoState>().0.lock() {
@@ -36,7 +40,7 @@ struct SettingsLocation {
     portable: bool,
 }
 
-pub(crate) fn settings_path(app: &AppHandle) -> (std::path::PathBuf, bool) {
+fn resolve_settings(app: &AppHandle) -> (std::path::PathBuf, bool) {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let probe = dir.join(".warper-write-test");
@@ -52,6 +56,11 @@ pub(crate) fn settings_path(app: &AppHandle) -> (std::path::PathBuf, bool) {
         .unwrap_or_else(|_| std::path::PathBuf::from("."))
         .join(SETTINGS_FILE);
     (fallback, false)
+}
+
+pub(crate) fn settings_path(app: &AppHandle) -> (std::path::PathBuf, bool) {
+    static RESOLVED: OnceLock<(std::path::PathBuf, bool)> = OnceLock::new();
+    RESOLVED.get_or_init(|| resolve_settings(app)).clone()
 }
 
 pub(crate) fn log_path(app: &AppHandle) -> std::path::PathBuf {
@@ -483,6 +492,53 @@ async fn get_exit_ip(app: AppHandle) -> String {
     refresh_ip(&app).await
 }
 
+#[tauri::command]
+async fn get_app_version(app: AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+fn store_update(app: &AppHandle, info: &update::UpdateInfo) {
+    if let Ok(mut slot) = app.state::<UpdateState>().0.lock() {
+        *slot = Some(info.clone());
+    }
+}
+
+#[tauri::command]
+async fn check_update(app: AppHandle) -> Result<update::UpdateInfo, String> {
+    let info = update::check(&app.package_info().version.to_string()).await?;
+    store_update(&app, &info);
+    Ok(info)
+}
+
+#[tauri::command]
+async fn get_update_state(app: AppHandle) -> Option<update::UpdateInfo> {
+    app.state::<UpdateState>()
+        .0
+        .lock()
+        .ok()
+        .and_then(|slot| slot.clone())
+}
+
+fn spawn_update_check(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let Ok(info) = update::check(&app.package_info().version.to_string()).await else {
+            return;
+        };
+        store_update(&app, &info);
+        if info.available {
+            emit(
+                &app,
+                &format!(
+                    "update available: v{} (running v{})",
+                    info.latest, info.current
+                ),
+            );
+            let _ = app.emit("update-available", info);
+        }
+    });
+}
+
 fn show_main(app: &AppHandle) {
     let handle = app.clone();
     std::thread::spawn(move || {
@@ -620,6 +676,7 @@ pub fn run() {
         .manage(WindowBuildLock(Mutex::new(())))
         .manage(VaultWarned(Mutex::new(false)))
         .manage(VaultLock(Mutex::new(())))
+        .manage(UpdateState(Mutex::new(None)))
         .setup(move |app| {
             aumid::ensure_aumid(app.handle());
             let _ = build_tray(app.handle());
@@ -627,6 +684,15 @@ pub fn run() {
             spawn_status_watcher(app.handle().clone());
             spawn_auto_reset(app.handle().clone());
             spawn_ip_watch(app.handle().clone());
+            spawn_update_check(app.handle().clone());
+            if let Some(flagged) = startup::clear_elevation_layer() {
+                emit(
+                    app.handle(),
+                    &format!(
+                        "removed run-as-administrator flag ({flagged}) — it blocks logon autostart"
+                    ),
+                );
+            }
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let start_min = start_minimized(&handle).await;
@@ -669,7 +735,10 @@ pub fn run() {
             get_ip_history,
             append_log,
             clear_log,
-            get_exit_ip
+            get_exit_ip,
+            get_app_version,
+            check_update,
+            get_update_state
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -683,71 +752,6 @@ pub fn run() {
         });
 }
 
-#[cfg(windows)]
-fn run_command() -> Option<String> {
-    use windows::core::HSTRING;
-    use windows::Win32::Foundation::ERROR_SUCCESS;
-    use windows::Win32::System::Registry::{
-        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
-    };
-
-    let mut key = HKEY::default();
-    if unsafe {
-        RegOpenKeyExW(
-            HKEY_CURRENT_USER,
-            &HSTRING::from(r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"),
-            None,
-            KEY_READ,
-            &mut key,
-        )
-    } != ERROR_SUCCESS
-    {
-        return None;
-    }
-    let mut size = 0u32;
-    let sized = unsafe {
-        RegQueryValueExW(
-            key,
-            &HSTRING::from("Warper"),
-            None,
-            None,
-            None,
-            Some(&mut size),
-        )
-    } == ERROR_SUCCESS
-        && size > 0;
-    let mut buf = vec![0u8; size as usize];
-    let ok = sized
-        && unsafe {
-            RegQueryValueExW(
-                key,
-                &HSTRING::from("Warper"),
-                None,
-                None,
-                Some(buf.as_mut_ptr()),
-                Some(&mut size),
-            )
-        } == ERROR_SUCCESS;
-    unsafe {
-        let _ = RegCloseKey(key);
-    }
-    if !ok {
-        return None;
-    }
-    let (chunks, _) = buf.as_chunks::<2>();
-    let wide: Vec<u16> = chunks
-        .iter()
-        .take(size as usize / 2)
-        .map(|c| u16::from_le_bytes(*c))
-        .collect();
-    Some(
-        String::from_utf16_lossy(&wide)
-            .trim_matches('\0')
-            .trim()
-            .to_string(),
-    )
-}
-
 fn repair_autostart_if_stale(app: &AppHandle) -> Option<String> {
     if !app.autolaunch().is_enabled().unwrap_or(false) {
         return None;
@@ -756,8 +760,9 @@ fn repair_autostart_if_stale(app: &AppHandle) -> Option<String> {
         .ok()?
         .to_string_lossy()
         .to_lowercase();
-    let stored = run_command()?;
-    if stored.to_lowercase().contains(&current) {
+    let stored = startup::run_entry()?;
+    let lower = stored.to_lowercase();
+    if lower.contains(&current) && lower.contains("--minimized") {
         return None;
     }
     app.autolaunch().enable().ok()?;
@@ -917,22 +922,31 @@ fn bind_child_lifetime(child: &tokio::process::Child) -> Result<(), String> {
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
 
-    unsafe {
-        let job =
-            std::mem::ManuallyDrop::new(CreateJobObjectW(None, None).map_err(|e| e.to_string())?);
+    static JOB: OnceLock<usize> = OnceLock::new();
+    let job = *JOB.get_or_init(|| unsafe {
+        let Ok(job) = CreateJobObjectW(None, None) else {
+            return 0;
+        };
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        SetInformationJobObject(
-            *job,
+        if SetInformationJobObject(
+            job,
             JobObjectExtendedLimitInformation,
             &raw const limits as *const _,
             std::mem::size_of_val(&limits) as u32,
         )
-        .map_err(|e| e.to_string())?;
-        let raw = child
-            .raw_handle()
-            .ok_or_else(|| "listener has no process handle".to_string())?;
-        AssignProcessToJobObject(*job, HANDLE(raw as _)).map_err(|e| e.to_string())?;
+        .is_err()
+        {
+            return 0;
+        }
+        job.0 as usize
+    });
+    if job == 0 {
+        return Err("job object unavailable".to_string());
     }
-    Ok(())
+    let raw = child
+        .raw_handle()
+        .ok_or_else(|| "listener has no process handle".to_string())?;
+    unsafe { AssignProcessToJobObject(HANDLE(job as _), HANDLE(raw as _)) }
+        .map_err(|e| e.to_string())
 }

@@ -1,17 +1,12 @@
 [package]
 name = "warper"
-version = "0.1.2"
+version = "0.1.3"
 description = "Tray app that cycles Cloudflare WARP exit IPs through warp-cli"
 authors = ["x01Jin"]
 license = "GPL-3.0-only"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [lib]
-# The `_lib` suffix may seem redundant but it is necessary
-# to make the lib name unique and wouldn't conflict with the bin name.
-# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "warper_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
@@ -43,8 +38,6 @@ windows = { version = "0.62.2", features = [
   "Win32_UI_Shell_PropertiesSystem",
 ] }
 
-
-# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
 codegen-units = 1
 lto = true
@@ -52,8 +45,6 @@ opt-level = 3
 panic = "abort"
 strip = true
 
-# Fast iteration: keep panic backtraces useful, skip debuginfo for deps.
-# Saves codegen + link time on every `tauri dev` / `tauri build --debug`.
 [profile.dev]
 debug = "line-tables-only"
 incremental = true
@@ -61,9 +52,6 @@ incremental = true
 [profile.dev.package."*"]
 debug = false
 
-# Fast shipped builds. Same manifest/behavior as
-# release without the full LTO bill. Tauri CLI has no --profile flag, so use
-# build-fast.ps1 (env overrides) or: cargo build --profile dev-release
 [profile.dev-release]
 inherits = "release"
 opt-level = 2

@@ -59,6 +59,17 @@
         </div>
       </section>
 
+      <section id="update-banner" class="banner update hidden" aria-live="polite">
+        <div class="banner-text">
+          <strong id="update-title">Update available</strong>
+          <span id="update-detail"></span>
+        </div>
+        <div class="banner-actions">
+          <button id="btn-update-page" class="ghost">Release page</button>
+          <button id="btn-update-dismiss" class="ghost">Dismiss</button>
+        </div>
+      </section>
+
       <div class="columns">
         <div class="actions panel">
           <button id="btn-quick" class="primary">Quick Reset</button>
@@ -102,6 +113,8 @@
         <section class="terminal" aria-label="Event log">
           <div class="term-head">
             <span>Log</span>
+            <span id="app-version" class="mono term-version">v—</span>
+            <button id="btn-check-update" class="term-clear">Check for updates</button>
             <button id="btn-clear" class="term-clear">Clear</button>
           </div>
           <pre id="log" aria-live="polite"></pre>

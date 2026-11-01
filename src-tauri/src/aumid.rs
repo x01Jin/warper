@@ -90,7 +90,7 @@ fn install_shortcut(aumid: &str) -> Option<()> {
     use windows::Win32::Foundation::PROPERTYKEY;
     use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
     use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CoUninitialize, IPersistFile, CLSCTX_INPROC_SERVER,
+        CoCreateInstance, CoInitializeEx, IPersistFile, CLSCTX_INPROC_SERVER,
         COINIT_APARTMENTTHREADED,
     };
     use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
@@ -119,10 +119,10 @@ fn install_shortcut(aumid: &str) -> Option<()> {
         .collect();
     let aumid_value = PROPVARIANT::from(aumid);
 
-    let com_ok = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }
-        .ok()
-        .is_ok();
-    let result = (|| {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+    }
+    (|| {
         let link: IShellLinkW =
             unsafe { CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER) }.ok()?;
         unsafe { link.SetPath(PCWSTR(exe_wide.as_ptr())) }.ok()?;
@@ -135,9 +135,5 @@ fn install_shortcut(aumid: &str) -> Option<()> {
         let persist: IPersistFile = link.cast().ok()?;
         unsafe { persist.Save(PCWSTR(lnk_wide.as_ptr()), true) }.ok()?;
         Some(())
-    })();
-    if com_ok {
-        unsafe { CoUninitialize() };
-    }
-    result
+    })()
 }
